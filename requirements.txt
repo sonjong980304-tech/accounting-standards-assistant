@@ -1,0 +1,34 @@
+# 회계기준 Assistant — 의존성 (Python 3.9+)
+# 설치:  python3 -m pip install -r requirements.txt
+
+# ── 검색·임베딩 ──
+chromadb==1.5.9
+sentence-transformers==5.1.2
+transformers==4.57.6
+torch==2.8.0
+rank-bm25==0.2.2
+numpy==2.0.2
+
+# ── LLM·파이프라인 (LangGraph) ──
+openai==2.37.0
+langchain==0.3.30
+langchain-core==0.3.86
+langchain-openai==0.3.35
+langgraph==0.6.11
+langsmith==0.4.37
+
+# ── LLM 판사 (실시간 평가, 벤더 선택) ──
+anthropic==0.102.0
+google-generativeai==0.8.6
+
+# ── UI ──
+streamlit==1.50.0
+
+# ── 데이터 파싱 (구형 PDF) ──
+pdfplumber==0.11.8
+
+# ── 환경변수 ──
+python-dotenv==1.2.1
+
+# 로컬 EXAONE 사용 시 Ollama 별도 설치 필요 (https://ollama.com) — pip 대상 아님
+# HWP 표 추출은 hwp5html(pyhwp) CLI 사용 — 시스템 설치 권장(README 참조)

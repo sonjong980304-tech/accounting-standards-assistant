@@ -1,0 +1,48 @@
+# ── 비밀정보 (절대 커밋 금지) ─────────────────────────────
+.env
+.env.*
+*.key
+
+# ── 데이터 (저작권·대용량) — data/ 전체 제외, 공개용 샘플만 화이트리스트 ──
+#   원문 저작권은 한국회계기준원(KASB)에 있음. 데이터 구조를 보여줄 소량 샘플(data/sample)만 공개.
+#   전체 데이터는 크롤러(crawl/)로 공식 출처에서 재현. (README 참조)
+data/*
+!data/sample/
+
+# ── 평가 산출물 — 성능표(eval/results/summary.md)만 공개 ──
+#   골든셋·원시 집계·검색결과 dump는 재생성 가능 + 원시로그라 제외.
+eval/goldenset.jsonl
+eval/goldenset_build_stats.json
+eval/*.bak
+eval/results/*.json
+eval/results/*.jsonl
+
+# ── 체크포인터·DB (대화기억 SQLite 등, 재생성 가능) ──
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+
+# ── 로그 ──
+*.log
+
+# ── 파이썬 ──
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# ── 스크래치·임시 ──
+scratchpad/
+scratch_*
+nohup.out
+*.tmp
+
+# ── 개발 도구·진행 상태 (비코드, 개인 세션 데이터) ──
+# oh-my-claudecode 세션·agent 실행 로그
+.omc/
+# 크롤링 진행 상태 (재개용)
+qa_progress.json
+*_progress.json
