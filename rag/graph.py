@@ -65,20 +65,32 @@ class Pipeline:
 
     # ---------------------------------------------------------- 노드
     def rewrite(self, state: State):
+        """검색 친화적 질의 정규화 + (있으면)대화 맥락 확장.
+
+        BGE-M3 임베더·리랭커가 질의 표면형에 민감해, 구어체·군더더기·붙여쓴 복합어가
+        있으면 정답 기준서 문단의 리랭커 점수가 무너져 검색에서 누락됨(개발비 케이스:
+        '개발비의 자산인식요건 알려줘'는 제11장 11.20 점수 0.012 vs '개발비 자산 인식
+        요건' 0.608). → 매 질의를 검색 질의로 정규화한다(의미·핵심어는 보존).
+        """
         t0 = time.time()
         q = state["question"]
         history = state.get("history", [])
-        rewritten = q
+        sys = ("너는 한국 회계기준 검색 질의 재작성기다. 사용자 질문을 벡터·리랭커 검색에 "
+               "적합한, 그 자체로 완결된 검색 질의로 다시 쓴다. 규칙: "
+               "① 구어체 어미·군더더기(알려줘·설명해줘·좀·~해줘·~인가요 등)를 제거한다. "
+               "② 붙여 쓴 복합어는 검색 친화적으로 띄어쓴다(예: '자산인식요건'→'자산 인식 요건'). "
+               "③ 핵심 회계 용어와 질문의 의미는 절대 바꾸거나 지어내거나 삭제하지 않는다. "
+               "④ 이전 대화가 있으면 지시대명사·생략을 구체화해 독립 질문으로 만든다. "
+               "재작성한 검색 질의 한 문장만 출력한다.")
         if history:
             convo = "\n".join("{}: {}".format(m["role"], m["content"]) for m in history[-6:])
-            sys = ("너는 검색 질의 재작성기다. 이전 대화를 참고하여 사용자의 후속 질문을 "
-                   "그 자체로 완결된, 검색 가능한 독립 질문으로 다시 써라. 지시대명사·생략을 "
-                   "구체화하되 원 질문의 의도는 보존한다. 재작성한 질문 한 문장만 출력한다.")
-            usr = "이전 대화:\n{}\n\n후속 질문: {}\n\n재작성 질문:".format(convo, q)
-            try:
-                rewritten = self._llm("rewrite").complete(sys, usr).strip() or q
-            except L.LLMError:
-                raise
+            usr = "이전 대화:\n{}\n\n질문: {}\n\n검색 질의:".format(convo, q)
+        else:
+            usr = "질문: {}\n\n검색 질의:".format(q)
+        try:
+            rewritten = self._llm("rewrite").complete(sys, usr).strip() or q
+        except L.LLMError:
+            raise
         return {"rewritten": rewritten,
                 "trace": [{"node": "rewrite", "before": q, "after": rewritten,
                            "latency_ms": int((time.time() - t0) * 1000)}]}
