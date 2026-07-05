@@ -6,8 +6,14 @@
 - 3층 신뢰 UI: 답변(+인용) / 근거 원문 카드(verify DB조회, PDF 페이지 렌더) / 해설
 실행:  streamlit run rag/app.py
 """
+import os
 import re
+import sys
 import time
+
+# 배포 환경(HF Spaces 등)에서 `streamlit run rag/app.py`로 실행되면 sys.path에 repo 루트가
+# 없어 `from rag import ...`가 깨진다. 실행 방식과 무관하게 repo 루트를 경로에 추가.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 
@@ -173,16 +179,23 @@ def sidebar():
         st.sidebar.warning("키 없음 — 입력하거나 GPT 대신 로컬 모델을 쓰세요.")
 
     st.sidebar.markdown("**모델**")
-    mode = st.sidebar.radio("모델 선택", ["GPT (기본)", "로컬 EXAONE"],
-                            captions=["gpt-4o-mini + gpt-5.5", "EXAONE 3.5 (Ollama)"])
-    local = mode.startswith("로컬")
-    if local:
-        try:
-            L.check_ollama_model(L.LOCAL_MODEL)
-            st.sidebar.success(f"로컬 모델 준비됨: {L.LOCAL_MODEL}")
-        except L.LLMError as e:
-            st.sidebar.error(str(e))
-            local = "unavailable"
+    # 배포 환경(KASB_CLOUD)은 GPT만 지원 — EXAONE는 Ollama 로컬 구동이라 관리형 호스팅 불가.
+    if os.environ.get("KASB_CLOUD"):
+        st.sidebar.radio("모델 선택", ["GPT (기본)"], captions=["gpt-4o-mini + gpt-5.5"])
+        st.sidebar.caption("☁️ 배포 환경에서는 GPT만 지원합니다 "
+                           "(EXAONE는 로컬 전용 — 저장소를 클론해 로컬에서 사용).")
+        local = False
+    else:
+        mode = st.sidebar.radio("모델 선택", ["GPT (기본)", "로컬 EXAONE"],
+                                captions=["gpt-4o-mini + gpt-5.5", "EXAONE 3.5 (Ollama)"])
+        local = mode.startswith("로컬")
+        if local:
+            try:
+                L.check_ollama_model(L.LOCAL_MODEL)
+                st.sidebar.success(f"로컬 모델 준비됨: {L.LOCAL_MODEL}")
+            except L.LLMError as e:
+                st.sidebar.error(str(e))
+                local = "unavailable"
 
     # 답변 품질 평가 (B트랙, 기본 off — 체크 안 하면 어떤 평가 호출도 없음)
     st.sidebar.divider()

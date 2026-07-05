@@ -122,7 +122,28 @@ def load_reranker(device=None):
     return ce
 
 
+def ensure_corpus():
+    """벡터DB가 없는 배포 환경(HF Spaces 등)에서 HF private 데이터셋에서 data/chroma를 내려받는다.
+
+    로컬(이미 data/chroma 존재)에서는 아무 일도 하지 않는다. 데이터 저작권(KASB) 때문에
+    벡터DB는 GitHub/Space git이 아닌 HF private 데이터셋에 두고, 앱 시작 시 토큰으로 로드한다.
+      - KASB_DATA_REPO: 예) "sonsdf/kasb-rag-corpus" (미설정이면 다운로드 스킵 = 로컬 모드)
+      - HF_TOKEN:       private 데이터셋 접근 토큰 (Space 시크릿)
+    """
+    if CHROMA_DIR.exists() and any(CHROMA_DIR.iterdir()):
+        return
+    repo = os.environ.get("KASB_DATA_REPO")
+    if not repo:
+        return   # 로컬: python3 -m rag.embed 로 직접 생성
+    from huggingface_hub import snapshot_download
+    snapshot_download(repo_id=repo, repo_type="dataset",
+                      local_dir=str(ROOT / "data"),
+                      token=os.environ.get("HF_TOKEN"),
+                      allow_patterns=["chroma/**"])
+
+
 def get_chroma():
     import chromadb
+    ensure_corpus()
     CHROMA_DIR.mkdir(parents=True, exist_ok=True)
     return chromadb.PersistentClient(path=str(CHROMA_DIR))

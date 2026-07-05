@@ -24,6 +24,9 @@ google-generativeai==0.8.6
 # ── UI ──
 streamlit==1.50.0
 
+# ── 배포: HF private 데이터셋에서 벡터DB(data/chroma) 로드 ──
+huggingface_hub>=0.25
+
 # ── 데이터 파싱 (구형 PDF) ──
 pdfplumber==0.11.8
 
