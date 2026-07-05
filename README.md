@@ -2,6 +2,16 @@
 
 한국회계기준원(KASB)의 **K-IFRS 기준서 · 일반기업회계기준 · 질의회신**을 근거로 회계 질문에 답하는 RAG 어시스턴트입니다. 일반적인 챗봇과 달리 **답변과 함께 그 근거가 된 기준서 원문을 그대로 보여주고**, 근거로 뒷받침되지 않는 질문에는 답을 지어내지 않고 "근거를 찾지 못했습니다"라고 물러섭니다. 회계 실무처럼 **출처 확인이 곧 신뢰인 도메인**에서, "그럴듯한 답"보다 "검증 가능한 답"을 우선하도록 설계했습니다.
 
+## ▶︎ 지금 바로 사용해보기
+
+[![Open in Spaces](https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-md.svg)](https://huggingface.co/spaces/sonsdf/accounting-standards-assistant)
+
+**🤗 Live Demo → https://huggingface.co/spaces/sonsdf/accounting-standards-assistant**
+
+앱 사이드바에 본인 **OpenAI API 키**를 입력하면 바로 질문할 수 있습니다 (키는 세션 메모리에만 저장되고 파일·로그에 남지 않습니다).
+
+> ⏳ **처음 접속하거나 첫 질문을 던질 때는 1~2분 정도 걸릴 수 있습니다.** 무료 호스팅(Hugging Face Spaces)이라 앱이 한동안 쉬면 절전 상태로 들어가 다시 깨어나는 시간이 필요하고, 첫 질문 순간에 임베딩·리랭커 모델(BGE-M3 · bge-reranker-v2-m3, 합계 약 2.5GB)과 벡터DB(약 250MB)를 처음 한 번 내려받기 때문입니다. **두 번째 질문부터는 캐시되어 빠르게 응답**합니다. 로컬 실행 시에는 이 다운로드가 없어 훨씬 빠릅니다.
+
 ![메인 화면](docs/images/main.png)
 
 ---
@@ -161,9 +171,9 @@ LANGCHAIN_PROJECT=kasb-rag
 
 ## 7. 배포
 
-> **배포 링크: 준비 중** (허깅페이스 Spaces 예정)
+> **배포 링크: https://huggingface.co/spaces/sonsdf/accounting-standards-assistant** (Hugging Face Spaces, 실행 중)
 
-**허깅페이스 Spaces**로 호스팅할 예정입니다. 무료 티어가 16GB RAM을 제공해 BGE-M3 임베더와 리랭커를 동시에 올릴 수 있기 때문입니다(Streamlit Community Cloud의 1GB로는 두 모델 동시 로드가 불가능했습니다). 벡터DB는 용량과 저작권 문제로 깃허브에 두지 않고, **허깅페이스 private 데이터셋**에 올려 앱 시작 시 토큰으로 내려받는 구조로 갑니다.
+**허깅페이스 Spaces**로 호스팅합니다. 무료 티어가 16GB RAM을 제공해 BGE-M3 임베더와 리랭커를 동시에 올릴 수 있기 때문입니다(Streamlit Community Cloud의 1GB로는 두 모델 동시 로드가 불가능했습니다). 벡터DB는 용량과 저작권 문제로 깃허브에 두지 않고, **허깅페이스 private 데이터셋**에 올려 앱 시작 시 토큰으로 내려받는 구조입니다. Spaces는 관리형이라 Streamlit SDK로 직접 생성되지 않아 **Docker SDK**로 배포했습니다(`Dockerfile`에서 Streamlit을 7860 포트로 구동).
 
 **로컬 vs 배포 차이:**
 
