@@ -181,7 +181,6 @@ LANGCHAIN_PROJECT=kasb-rag
 
 ## 7. 배포
 
-> **배포 링크: https://huggingface.co/spaces/sonsdf/accounting-standards-assistant** (Hugging Face Spaces, 실행 중)
 
 **허깅페이스 Spaces**로 호스팅합니다. 무료 티어가 16GB RAM을 제공해 BGE-M3 임베더와 리랭커를 동시에 올릴 수 있기 때문입니다(Streamlit Community Cloud의 1GB로는 두 모델 동시 로드가 불가능했습니다). 벡터DB는 용량과 저작권 문제로 깃허브에 두지 않고, **허깅페이스 private 데이터셋**에 올려 앱 시작 시 토큰으로 내려받는 구조입니다. Spaces는 관리형이라 Streamlit SDK로 직접 생성되지 않아 **Docker SDK**로 배포했습니다(`Dockerfile`에서 Streamlit을 7860 포트로 구동).
 
