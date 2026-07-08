@@ -25,6 +25,14 @@ COLLECTIONS = {
     "qa_kifrs": ["016001.jsonl", "016002.jsonl", "016005.jsonl"],
     "qa_kgaap": ["016003.jsonl", "016006.jsonl"],
 }
+
+# 감리지적사례 사이드카 컬렉션 — COLLECTIONS와 **완전히 분리**된 별도 상수.
+#   · graph.ALL_COLLS(라우터 후보)에 절대 섞이면 안 됨(참고용 사이드카, 답변 근거 아님).
+#   · 컬렉션명은 *_standards 접미사를 피함(search.retrieve_routed의 min_standards 오작동 방지).
+#   · JSONL은 rag.sync_audit_cases 가 audit-sentinel cases.jsonl 을 변환해 생성(레포 결합도↓).
+AUDIT_COLLECTIONS = {
+    "audit_cases": ["audit_cases.jsonl"],
+}
 BASE_URL = "https://www.kasb.or.kr"
 
 
@@ -36,6 +44,11 @@ def embed_text(rec):
       분리 실패(body_fallback) 문서는 body 사용.
     """
     rt = rec.get("record_type")
+    if rt == "audit_case":
+        # 감리지적사례: 사실관계+지적사항+판단근거를 결합해 1임베딩(레코드=청크 1개).
+        #   audit_gap/implication은 임베딩에 넣지 않음(표시용 메타로만 보존). 라벨은 검색·표시 보조.
+        return "사실관계: {}\n\n지적사항: {}\n\n판단근거: {}".format(
+            rec.get("facts", ""), rec.get("violation", ""), rec.get("basis", ""))
     if rt == "term":
         # 용어명을 앞에 붙여 임베딩 (정의문에는 용어명이 안 들어가 매칭 실패 방지)
         term = rec.get("term", "")
@@ -73,12 +86,26 @@ def to_metadata(rec, coll):
     # 첨부는 리스트라 문자열로 join
     if rec.get("attachments"):
         md["attachments"] = " | ".join(rec["attachments"])
+    if rec.get("record_type") == "audit_case":
+        # 감리지적사례 표시용 필드(임베딩 대상 여부와 무관하게 보존). title은 위 화이트리스트가
+        # 이미 처리. facts/violation/basis는 embed_text 본문(검색결과 text)으로 노출되므로 메타
+        # 중복 저장하지 않음. Chroma는 str/int/float/bool만 허용 → None/"" 제외, bool 명시 변환.
+        for k in ("case_id", "standard", "source_url",
+                  "audit_gap", "implication", "fiscal_year"):
+            v = rec.get(k)
+            if v not in (None, ""):
+                md[k] = v
+        if rec.get("standard_superseded") is not None:
+            md["standard_superseded"] = bool(rec["standard_superseded"])
     return md
 
 
-def iter_records():
-    """(collection, file, lineno, record) 스트림. id = f'{file}:{lineno}' (재개용 안정키)."""
-    for coll, files in COLLECTIONS.items():
+def iter_records(collections=None):
+    """(collection, file, lineno, record) 스트림. id = f'{file}:{lineno}' (재개용 안정키).
+
+    collections 미지정 시 기본 COLLECTIONS. AUDIT_COLLECTIONS 등 다른 매핑을 넘겨 재사용 가능.
+    """
+    for coll, files in (collections or COLLECTIONS).items():
         for fn in files:
             path = PARSED / fn
             if not path.exists():

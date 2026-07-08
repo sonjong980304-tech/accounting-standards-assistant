@@ -105,6 +105,59 @@ def highlight_citations(text, valid_refs, anchors=None):
     return "".join(out)
 
 
+# ------------------------------------------------- 감리지적사례 사이드카 (참고용, 근거와 분리)
+def _render_audit_card(card):
+    """감리사례 카드 1건: 제목 + (개정 경고) + 관련기준/연도 + facts/violation/basis 본문 + 출처."""
+    st.markdown(f"#### {md_escape(card.get('title', ''))}")
+    if card.get("standard_superseded"):
+        st.warning("⚠️ 이 사례의 근거 기준서는 이후 개정·대체되었습니다. 현행 기준 확인이 필요합니다.")
+    meta = []
+    if card.get("standard"):
+        meta.append(f"관련기준: {card['standard']}")
+    if card.get("fiscal_year"):
+        meta.append(f"회계연도: {card['fiscal_year']}")
+    if meta:
+        st.caption(" · ".join(meta))
+    # facts/violation/basis는 card['text']에 '사실관계:/지적사항:/판단근거:' 라벨로 실려 있음
+    st.markdown(md_escape(card.get("text", "")))
+    if card.get("source_url"):
+        st.markdown(f"[↗ 금융감독원 원문 보기]({card['source_url']})")
+    st.caption(f"case_id: {card.get('case_id', '—')} · 관련도 {card.get('score', 0):.2f}")
+
+
+def render_audit_section(cases):
+    """감리지적사례 사이드카: 빨간 강조 버튼 → (열림 시) st.columns 우측 패널.
+
+    - 답변의 근거·인용과 **완전히 분리된** 참고용. cases 비어있으면 아무것도 렌더하지 않음.
+    - 패널 구조·상태·닫기는 100% 네이티브 st.columns/st.button/session_state (커스텀 CSS/JS 없음).
+    - 커스텀 CSS는 '이 버튼 하나'(key=audit_btn)의 color/font-weight로만 범위 한정(패널 레이아웃 CSS 없음).
+    """
+    cases = cases or []
+    if not cases:
+        return
+    open_key = "audit_panel_open"
+    # 버튼 색상만 스코프된 최소 CSS — .st-key-audit_btn 클래스로 그 버튼 하나만 타겟(패널엔 미적용).
+    st.markdown(
+        "<style>.st-key-audit_btn button{color:#d32f2f !important;"
+        "font-weight:700 !important;}</style>",
+        unsafe_allow_html=True)
+    if st.button(f"⚠️ 관련 감리지적사례 {len(cases)}건 — 참고용 보기", key="audit_btn"):
+        st.session_state[open_key] = not st.session_state.get(open_key, False)
+        st.rerun()
+    if st.session_state.get(open_key):
+        _, right = st.columns([1, 2])   # 네이티브 우측 컬럼 = 패널 (CSS 아님)
+        with right:
+            st.markdown("### ⚖️ 참고: 감리지적사례")
+            st.caption("※ 아래 사례는 답변의 근거가 아닙니다 — 질문과 관련될 수 있는 참고 자료입니다.")
+            if st.button("✕ 패널 닫기", key="audit_close"):
+                st.session_state[open_key] = False
+                st.rerun()
+            for i, c in enumerate(cases):
+                _render_audit_card(c)
+                if i < len(cases) - 1:
+                    st.divider()
+
+
 # ---------------------------------------------------------------- 실시간 평가 (B트랙)
 def render_eval(eval_cfg, question, ans, retrieved):
     """답변 후 판사 LLM으로 Faithfulness/Answer Relevancy 채점 + 표시.
@@ -244,6 +297,8 @@ def main():
 
     q = st.chat_input("질문을 입력하세요")
     if not q:
+        # 감리사례 버튼/닫기 등으로 인한 리런(q 없음): 직전 답변의 사이드카 패널을 유지 렌더
+        render_audit_section(st.session_state.get("last_audit_cases"))
         return
     with st.chat_message("user"):
         st.markdown(q)
@@ -312,6 +367,11 @@ def main():
                 st.markdown("##### 💬 답변")
         # 3층-1: 답변 (인용 배지 클릭 → 카드로 스크롤)
         ans_box.markdown(highlight_citations(ans.get("answer", ""), valid, anchors))
+        # 3층-2.5: 감리지적사례 사이드카 — 답변 근거/인용과 분리된 참고용 (버튼 → 우측 패널).
+        #   새 답변은 접힌 상태(버튼)로 시작. 리런 시엔 위 `if not q` 분기가 유지 렌더.
+        st.session_state.last_audit_cases = final.get("audit_cases", []) or []
+        st.session_state.audit_panel_open = False
+        render_audit_section(st.session_state.last_audit_cases)
         # 3층-3: 해설 (원문과 시각 구분)
         with st.container():
             st.divider()

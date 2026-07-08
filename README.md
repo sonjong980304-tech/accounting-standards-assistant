@@ -30,6 +30,7 @@
 - **하이브리드 검색** — BM25(어휘) + dense(의미) 병합 후 리랭커로 재정렬.
 - **멀티 LLM** — GPT 기본 / 로컬 EXAONE 옵션(폐쇄망·오프라인용).
 - **환각 방지** — 검색 근거로만 답하고, 근거가 없으면 refusal. 근거 원문은 LLM이 다시 쓰지 않고 DB 원문을 그대로 표시.
+- **감리지적사례 참고** — 관련된 금융감독원 감리지적사례가 있으면 답변과 **완전히 분리된** 참고 정보로 함께 보여줍니다(답변의 근거로는 절대 사용하지 않음).
 - **RAGAS 평가** — 검색(Recall/Precision)은 골든셋으로 기계 채점, 생성(Faithfulness/Relevancy)은 LLM 판사로 평가.
 
 ---
@@ -74,6 +75,22 @@ flowchart LR
 **② 답변 + 인용 + 품질 평가** — 문장마다 근거 식별자를 인용하고, 옵션을 켜면 LLM 판사가 근거 충실도·질문 관련성을 채점합니다(판사와 답변이 같은 벤더면 자기편향 경고).
 
 ![답변과 품질 평가](docs/images/qa_example.png)
+
+### 참고: 감리지적사례 사이드카 (답변과 분리된 정보)
+
+기준서 질문에는 종종 "실제로 이렇게 처리했다가 지적받은 사례가 있는가"가 함께 궁금해집니다. 그래서 금융감독원 감리지적사례(별도 프로젝트 `audit-sentinel`에서 수집한 65건)를 답변과 나란히, 하지만 **완전히 분리된 형태**로 보여줍니다.
+
+- **격리**: 감리사례는 기준서·질의회신과 별도의 ChromaDB 컬렉션(`audit_cases`)에 있고, 질문 라우팅 후보에도 절대 섞이지 않습니다. `answer` 노드는 이 컬렉션을 참조하지 않으므로, 감리사례가 답변 문장이나 인용에 영향을 주는 일은 구조적으로 불가능합니다.
+- **자동 판정**: 매 질문마다 조용히 관련 사례를 검색해, 리랭커 점수가 임계값을 넘을 때만 표시합니다. 관련 사례가 없으면 아무것도 나타나지 않습니다(억지로 끼워 맞추지 않음).
+- **참고용 명시**: 패널 상단에 "아래 사례는 답변의 근거가 아닙니다"라고 명시하고, 인용된 기준서가 이후 개정·대체됐으면 경고 배지를 표시합니다.
+
+**① 답변 하단의 참고 배너** — 관련 감리사례가 있을 때만 나타나는 강조 버튼입니다.
+
+![감리지적사례 참고 배너](docs/images/audit_case_button.png)
+
+**② 클릭 시 우측 패널** — 사실관계·지적사항·판단근거와 금융감독원 원문 링크를 원문 그대로 보여줍니다.
+
+![감리지적사례 참고 패널](docs/images/audit_case_panel.png)
 
 ---
 
@@ -213,12 +230,14 @@ EXAONE가 배포판에서 빠지는 이유는 구동 방식 때문입니다. EXA
 
 ```
 rag/            # RAG 파이프라인 (LangGraph)
-  ├─ app.py        # Streamlit UI (3층 신뢰 구조)
-  ├─ graph.py      # 5노드 파이프라인 (rewrite→route→retrieve→answer→verify)
+  ├─ app.py        # Streamlit UI (3층 신뢰 구조 + 감리사례 사이드카)
+  ├─ graph.py      # 파이프라인 (rewrite→route→{retrieve,audit_lookup}→answer→verify)
   ├─ search.py     # 하이브리드 검색 (BM25+dense→RRF→리랭킹)
   ├─ llm.py        # 모델 추상화 (GPT / EXAONE)
   ├─ common.py     # 임베더·리랭커·컬렉션 정의
-  └─ eval/         # RAGAS 평가 (배치 + 실시간 판사)
+  ├─ sync_audit_cases.py       # 감리지적사례 동기화(audit-sentinel → audit_cases 컬렉션)
+  ├─ install_audit_scheduler.sh # 감리사례 분기별 갱신 크론 등록(--print/--install)
+  └─ eval/         # RAGAS 평가 (배치 + 실시간 판사) + 감리사례 검증(스모크테스트/표본검토)
 crawler.py            # 질의회신 크롤러
 standards_crawler.py  # 기준서 크롤러
 parsers/              # HWP/PDF 파서

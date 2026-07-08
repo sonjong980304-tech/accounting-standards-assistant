@@ -21,7 +21,16 @@ from rag import llm as L
 from rag.search import Index
 
 TRACE_LOG = C.ROOT / "data" / "traces.jsonl"
-ALL_COLLS = list(C.COLLECTIONS.keys())
+ALL_COLLS = list(C.COLLECTIONS.keys())   # 라우터 후보 — AUDIT_COLLECTIONS는 절대 섞지 않음
+
+# 감리지적사례 사이드카 표시 임계값(리랭커 점수 컷오프). 미달 후보는 자동 숨김.
+#   실측 튜닝(2026-07-09): audit_smoke_test 자가회수 63/65(96.9%) 점수 하한 0.859 +
+#   audit_sample_review 15표본의 실제 관련 매치 분포(약한 매치 0.57~0.66대, 강한 매치 0.8+)를
+#   근거로 0.5→0.6 상향. 가장 약한 주변부 매치를 걸러내되 실제 관련 매치는 대부분 보존.
+#   ⚠️ 알려진 한계: 점수 기반 필터라 "고점수 오탐"은 못 거름(표본 관찰: 서로 다른 기준서인데
+#   0.94로 매치된 사례 1건 — 리랭커가 '숫자조정류' 표면 유사성에 흔들린 것으로 추정, 임계값을
+#   더 올려도 해결 안 됨). 데이터가 늘거나 재관찰되면 재튜닝 필요.
+AUDIT_CASE_SCORE_THRESHOLD = 0.6
 
 
 class State(TypedDict, total=False):
@@ -29,11 +38,28 @@ class State(TypedDict, total=False):
     rewritten: str
     route: dict
     retrieved: list
+    audit_cases: list       # 감리지적사례 사이드카(참고용) — answer는 절대 참조하지 않음
     answer: dict
     verified: list
     history: Annotated[list, operator.add]   # 대화기억 (턴 누적)
     trace: Annotated[list, operator.add]
     # 주: api_key/local은 State가 아닌 Pipeline 인스턴스에 둔다 (체크포인터에 키 저장 방지)
+
+
+def _audit_filter(hits, threshold=AUDIT_CASE_SCORE_THRESHOLD):
+    """리랭커 점수 임계값 미만 후보 제외(사람·LLM 개입 없는 자동 표시/숨김 판정)."""
+    return [h for h in hits if h.get("score", 0.0) >= threshold]
+
+
+def _audit_card(hit):
+    """검색 히트 → UI 표시용 감리사례 카드. facts/violation/basis는 hit['text']에 라벨로 실려 있음.
+    (answer 노드는 이 카드/audit_cases 값을 절대 참조하지 않는다 — 프롬프트·인용 게이트 격리.)"""
+    m = hit.get("meta", {})
+    return {"case_id": m.get("case_id", ""), "title": m.get("title", ""),
+            "standard": m.get("standard", ""), "source_url": m.get("source_url", ""),
+            "standard_superseded": bool(m.get("standard_superseded", False)),
+            "fiscal_year": m.get("fiscal_year", ""),
+            "text": hit.get("text", ""), "score": float(hit.get("score", 0.0))}
 
 
 def _clip(s, n=400):
@@ -174,6 +200,31 @@ class Pipeline:
                            "ref_keys": [h["ref_key"] or h["doc_no"] for h in slim],
                            "latency_ms": int((time.time() - t0) * 1000)}]}
 
+    def audit_lookup(self, state: State):
+        """감리지적사례 사이드카 조회 — 답변 근거와 **완전히 분리된** 참고용(접근법 B: 병렬 노드).
+
+        - 매 질문마다 무조건 실행(트리거 조건 없음). rewritten 질의로 audit_cases 컬렉션만
+          dense+리랭킹 top-3 → 리랭커 점수 임계값 미달 후보 제외(자동 표시/숨김).
+        - 조회 실패(컬렉션 부재·예외)는 verify의 관용 패턴처럼 조용히 빈 결과로 처리(답변 흐름
+          에 영향 없음). audit_cases 미로드 시 retrieve_routed의 빈-필터 폴백(전 컬렉션 검색)이
+          비감리 결과를 반환하지 않도록 컬렉션 존재를 먼저 확인한다.
+        - ⚠️ 반환 audit_cases는 answer 노드가 절대 참조하지 않는다(프롬프트·has_grounds 게이트 격리).
+        """
+        t0 = time.time()
+        cases = []
+        if "audit_cases" in self.index.colls:
+            try:
+                hits = self.index.retrieve_routed(state["rewritten"], ["audit_cases"],
+                                                  k=3, min_standards=0, per_coll=65)
+                cases = [_audit_card(h) for h in _audit_filter(hits)]
+            except Exception:   # noqa: BLE001 — 사이드카 실패는 답변에 영향 없이 조용히 무시
+                cases = []
+        return {"audit_cases": cases,
+                "trace": [{"node": "audit_lookup",
+                           "matched": [{"case_id": c["case_id"], "score": c["score"]}
+                                       for c in cases],
+                           "latency_ms": int((time.time() - t0) * 1000)}]}
+
     REFUSAL = "근거를 찾지 못했습니다."
 
     def answer(self, state: State):
@@ -261,6 +312,8 @@ class Pipeline:
                  "route": state.get("route"),
                  "retrieved_refs": [h["ref_key"] or h["doc_no"]
                                     for h in state.get("retrieved", [])],
+                 "audit_cases": [{"case_id": c.get("case_id"), "score": c.get("score")}
+                                 for c in state.get("audit_cases", [])],
                  "answer": _clip(state.get("answer", {}).get("answer"), 300),
                  "used_refs": state.get("answer", {}).get("used_refs", []),
                  "trace": state.get("trace", []) + verify_trace}
@@ -300,12 +353,16 @@ def build_graph(index, checkpoint_path=None, api_key=None, local=False):
     g.add_node("rewrite", p.rewrite)
     g.add_node("route", p.route)
     g.add_node("retrieve", p.retrieve)
+    g.add_node("audit_lookup", p.audit_lookup)   # 접근법 B: retrieve와 병렬 사이드카
     g.add_node("answer", p.answer)
     g.add_node("verify", p.verify)
     g.add_edge(START, "rewrite")
     g.add_edge("rewrite", "route")
+    # route 이후 retrieve(답변 근거)와 audit_lookup(참고용 사이드카)로 fan-out, 둘 다 answer로 합류.
     g.add_edge("route", "retrieve")
+    g.add_edge("route", "audit_lookup")
     g.add_edge("retrieve", "answer")
+    g.add_edge("audit_lookup", "answer")   # answer는 두 노드 완료 후 1회 실행(fan-in)
     g.add_edge("answer", "verify")
     g.add_edge("verify", END)
 

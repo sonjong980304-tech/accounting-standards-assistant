@@ -44,14 +44,11 @@ def existing_ids(coll):
         return set()
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--batch", type=int, default=32)
-    args = ap.parse_args()
-
+def run(collections=None):
+    """collections(기본 COLLECTIONS) 매핑을 임베딩·적재. AUDIT_COLLECTIONS 등도 재사용 가능."""
     # 컬렉션별 레코드 수집
     buckets = defaultdict(list)   # coll -> [(id, text, metadata)]
-    for coll, fn, i, rec in C.iter_records():
+    for coll, fn, i, rec in C.iter_records(collections):
         text = C.embed_text(rec)
         if not text.strip():
             continue
@@ -103,6 +100,13 @@ def main():
     print(f"\n전체 적재 완료: {grand_done}건, {time.time()-t0:.0f}s", flush=True)
     print("컬렉션 현황:", {c.name: c.count() for c in client.list_collections()},
           flush=True)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--batch", type=int, default=32)
+    ap.parse_args()
+    run()
 
 
 if __name__ == "__main__":
