@@ -214,8 +214,12 @@ class Pipeline:
         cases = []
         if "audit_cases" in self.index.colls:
             try:
+                # per_coll=20(코드베이스 관행값): 65건 전체(구버전 per_coll=65)를 매 질문마다
+                # 리랭킹하면 12초대 지연 유발(실측). dense 사전필터 20위 안에 진짜 관련
+                # 사례가 안정적으로 들어옴(스모크테스트 자기회수 점수 0.86~1.0로 확인) →
+                # 후보를 줄여도 recall 손실 거의 없이 리랭킹 비용만 3배 이상 절감.
                 hits = self.index.retrieve_routed(state["rewritten"], ["audit_cases"],
-                                                  k=3, min_standards=0, per_coll=65)
+                                                  k=3, min_standards=0, per_coll=20)
                 cases = [_audit_card(h) for h in _audit_filter(hits)]
             except Exception:   # noqa: BLE001 — 사이드카 실패는 답변에 영향 없이 조용히 무시
                 cases = []

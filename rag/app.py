@@ -158,6 +158,29 @@ def render_audit_section(cases):
                     st.divider()
 
 
+def render_turn_result(turn):
+    """한 턴의 근거카드+답변(클릭 가능한 인용)+감리사례+해설을 렌더(3층-1~3, 2.5).
+
+    신선한 답변 직후와, q 없는 리런(감리사례 버튼/닫기 클릭) 양쪽에서 동일하게 호출된다.
+    st.session_state.last_turn에 저장된 값을 그대로 재생하므로 리런 후에도 highlight_citations
+    의 앵커 링크(인용 배지 클릭 → 근거카드 스크롤)가 계속 동작한다. eval(3층-4)은 판사 LLM
+    재호출·비용 문제로 여기 포함하지 않고 신선한 경로에서만 별도 호출한다.
+    """
+    retrieved, used, anchors = turn.get("retrieved", []), turn.get("used"), turn.get("anchors")
+    if retrieved and used:
+        render_evidence(retrieved, used_refs=used, anchors=anchors)
+        st.markdown("##### 💬 답변")
+    st.markdown(turn.get("answer_html", ""))
+    render_audit_section(turn.get("audit_cases", []))
+    with st.container():
+        st.divider()
+        if turn.get("has_grounds"):
+            st.caption(f"🔗 사용 근거: {', '.join(turn.get('used_refs', [])) or '—'}  ·  "
+                       f"이 답변은 위 근거 원문에서 생성됐습니다.")
+        else:
+            st.caption("⚠️ 근거를 찾지 못해 답변하지 않았습니다 (환각 방지).")
+
+
 # ---------------------------------------------------------------- 실시간 평가 (B트랙)
 def render_eval(eval_cfg, question, ans, retrieved):
     """답변 후 판사 LLM으로 Faithfulness/Answer Relevancy 채점 + 표시.
@@ -290,15 +313,28 @@ def main():
 
     api_key, local, eval_cfg = sidebar()
 
-    # 지난 대화 렌더
-    for msg in st.session_state.messages:
+    q = st.chat_input("질문을 입력하세요")
+
+    # 지난 대화 렌더. q 없는 리런(감리사례 버튼/닫기 클릭 등)이면 마지막 assistant 메시지는
+    # 아래에서 last_turn으로 풍부하게(근거카드+클릭 가능한 인용 배지) 재렌더하므로 평문 중복 방지.
+    messages = st.session_state.messages
+    skip_last_idx = (len(messages) - 1) if (not q and messages
+                                            and messages[-1]["role"] == "assistant"
+                                            and st.session_state.get("last_turn")) else -1
+    for i, msg in enumerate(messages):
+        if i == skip_last_idx:
+            continue
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    q = st.chat_input("질문을 입력하세요")
     if not q:
-        # 감리사례 버튼/닫기 등으로 인한 리런(q 없음): 직전 답변의 사이드카 패널을 유지 렌더
-        render_audit_section(st.session_state.get("last_audit_cases"))
+        # 감리사례 버튼/닫기 등으로 인한 리런(q 없음): 직전 턴 전체(근거카드·인용·해설·사이드카)를
+        # 세션 상태에서 재렌더 — highlight_citations의 앵커 링크(조항 클릭→근거카드 스크롤)가
+        # 리런 후에도 계속 동작해야 하므로 평문(messages)이 아니라 last_turn을 그대로 재생.
+        last_turn = st.session_state.get("last_turn")
+        if last_turn:
+            with st.chat_message("assistant"):
+                render_turn_result(last_turn)
         return
     with st.chat_message("user"):
         st.markdown(q)
@@ -360,28 +396,22 @@ def main():
         valid = {h["ref_key"] or h["doc_no"] for h in final.get("retrieved", [])}
         used = set(ans.get("used_refs", []))
         anchors = {r: anchor_id(r) for r in used}   # 인용 배지 → 근거 카드 스크롤
-        # 3층-2: 근거 카드 — 인용된 것 ★+앵커로 '교체' 렌더 (중복 없이 이전 것을 대체)
-        if final.get("retrieved") and used:
-            with ev_box.container():
-                render_evidence(final["retrieved"], used_refs=used, anchors=anchors)
-                st.markdown("##### 💬 답변")
-        # 3층-1: 답변 (인용 배지 클릭 → 카드로 스크롤)
-        ans_box.markdown(highlight_citations(ans.get("answer", ""), valid, anchors))
-        # 3층-2.5: 감리지적사례 사이드카 — 답변 근거/인용과 분리된 참고용 (버튼 → 우측 패널).
-        #   새 답변은 접힌 상태(버튼)로 시작. 리런 시엔 위 `if not q` 분기가 유지 렌더.
-        st.session_state.last_audit_cases = final.get("audit_cases", []) or []
-        st.session_state.audit_panel_open = False
-        render_audit_section(st.session_state.last_audit_cases)
-        # 3층-3: 해설 (원문과 시각 구분)
-        with st.container():
-            st.divider()
-            if ans.get("has_grounds"):
-                st.caption(f"🔗 사용 근거: {', '.join(ans.get('used_refs', [])) or '—'}  ·  "
-                           f"이 답변은 위 근거 원문에서 생성됐습니다.")
-            else:
-                st.caption("⚠️ 근거를 찾지 못해 답변하지 않았습니다 (환각 방지).")
+        # ev_box/ans_box(교체형 st.empty)를 비워, 아래 render_turn_result가 그리는 최종본과
+        # 중복 렌더되지 않게 한다(스트리밍 중 임시 렌더 제거).
+        ev_box.empty()
+        ans_box.empty()
+        st.session_state.last_turn = {
+            "retrieved": final.get("retrieved", []), "used": used, "anchors": anchors,
+            "answer_html": highlight_citations(ans.get("answer", ""), valid, anchors),
+            "has_grounds": ans.get("has_grounds"), "used_refs": ans.get("used_refs", []),
+            "audit_cases": final.get("audit_cases", []) or [],
+        }
+        st.session_state.audit_panel_open = False   # 새 답변은 접힌 상태(버튼)로 시작
+        # 3층-1~3, 2.5: 근거카드(★+앵커)·클릭 가능한 인용·감리사례·해설 (q 없는 리런에서도
+        # render_turn_result(last_turn)으로 동일하게 재생돼 인용 앵커 링크가 유지된다)
+        render_turn_result(st.session_state.last_turn)
 
-        # 3층-4(선택): 실시간 품질 평가 — 토글 on일 때만 판사 호출
+        # 3층-4(선택): 실시간 품질 평가 — 토글 on일 때만, 신선한 답변 직후 1회만 호출(재실행 방지)
         render_eval(eval_cfg, q, ans, final.get("retrieved", []))
 
     st.session_state.messages.append(
