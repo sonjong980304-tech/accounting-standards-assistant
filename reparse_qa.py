@@ -23,7 +23,8 @@ from parsers import ExtractError, extract_document_text
 def reparse_record(board_id, rec):
     """레코드 1건 재파싱. (갱신된 rec, 변경여부) 반환."""
     cfg = BOARDS[board_id]
-    seq = rec["post_id"].split("-")[1]
+    # 016005 등 일부 게시판은 post_id 필드가 없음 → doc_no("게시판-seq")로 폴백
+    seq = rec.get("post_id", rec["doc_no"]).split("-")[1]
     html_path = DATA / "raw" / board_id / "html" / (seq + ".html")
     if not html_path.exists():
         return rec, False

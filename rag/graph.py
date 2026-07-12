@@ -78,6 +78,39 @@ def _extract_json(text):
         return None
 
 
+_REWRITE_SYS = (
+    "너는 한국 회계기준 검색 질의 재작성기다. 사용자 질문을 벡터·리랭커 검색에 "
+    "적합한, 그 자체로 완결된 검색 질의로 다시 쓴다. 규칙: "
+    "① 구어체 어미·군더더기(알려줘·설명해줘·좀·~해줘·~인가요 등)를 제거한다. "
+    "② 붙여 쓴 복합어는 검색 친화적으로 띄어쓴다(예: '자산인식요건'→'자산 인식 요건'). "
+    "③ 핵심 회계 용어와 질문의 의미는 절대 바꾸거나 지어내거나 삭제하지 않는다. "
+    "④ 이전 대화가 있으면, 현재 질문이 그 대화의 '후속질문'인지 '새 주제'인지 먼저 판단한다. "
+    "· 후속질문(지시대명사·생략이 있거나 '그럼/그 경우/~는?'처럼 앞 맥락 없이는 "
+    "불완전한 질문)이면, 맥락을 참고해 지시대명사·생략을 구체화한 독립 질문으로 확장한다. "
+    "· 새 주제(앞 대화와 다른 회계 주제로 전환된 질문. 예: 수익인식 대화 후 파생상품)면 "
+    "이전 대화를 완전히 무시하고 현재 질문만으로 재작성한다(이전 주제어를 절대 붙이지 말 것). "
+    "· 애매하면 현재 질문을 우선한다(맥락을 억지로 붙이지 말 것 — 오염이 맥락 누락보다 위험). "
+    "재작성한 검색 질의 한 문장만 출력한다.")
+
+
+def _rewrite_prompt(q, history=None):
+    if history:
+        convo = "\n".join("{}: {}".format(m["role"], m["content"]) for m in history[-6:])
+        usr = "이전 대화:\n{}\n\n질문: {}\n\n검색 질의:".format(convo, q)
+    else:
+        usr = "질문: {}\n\n검색 질의:".format(q)
+    return _REWRITE_SYS, usr
+
+
+def rewrite_query(llm, q, history=None):
+    """질의 재작성 단일 호출(Pipeline 밖에서도 재사용 — 배치 평가 rewrite 트랙용).
+
+    Pipeline.rewrite와 동일한 프롬프트·규칙을 공유해 실시간 앱과 평가가 어긋나지 않게 한다.
+    """
+    sys, usr = _rewrite_prompt(q, history)
+    return llm.complete(sys, usr).strip() or q
+
+
 class Pipeline:
     """Index(무거운 모델)와 LLM 게터를 보유하고 그래프를 구성."""
 
@@ -104,27 +137,7 @@ class Pipeline:
         t0 = time.time()
         q = state["question"]
         history = state.get("history", [])
-        sys = ("너는 한국 회계기준 검색 질의 재작성기다. 사용자 질문을 벡터·리랭커 검색에 "
-               "적합한, 그 자체로 완결된 검색 질의로 다시 쓴다. 규칙: "
-               "① 구어체 어미·군더더기(알려줘·설명해줘·좀·~해줘·~인가요 등)를 제거한다. "
-               "② 붙여 쓴 복합어는 검색 친화적으로 띄어쓴다(예: '자산인식요건'→'자산 인식 요건'). "
-               "③ 핵심 회계 용어와 질문의 의미는 절대 바꾸거나 지어내거나 삭제하지 않는다. "
-               "④ 이전 대화가 있으면, 현재 질문이 그 대화의 '후속질문'인지 '새 주제'인지 먼저 판단한다. "
-               "· 후속질문(지시대명사·생략이 있거나 '그럼/그 경우/~는?'처럼 앞 맥락 없이는 "
-               "불완전한 질문)이면, 맥락을 참고해 지시대명사·생략을 구체화한 독립 질문으로 확장한다. "
-               "· 새 주제(앞 대화와 다른 회계 주제로 전환된 질문. 예: 수익인식 대화 후 파생상품)면 "
-               "이전 대화를 완전히 무시하고 현재 질문만으로 재작성한다(이전 주제어를 절대 붙이지 말 것). "
-               "· 애매하면 현재 질문을 우선한다(맥락을 억지로 붙이지 말 것 — 오염이 맥락 누락보다 위험). "
-               "재작성한 검색 질의 한 문장만 출력한다.")
-        if history:
-            convo = "\n".join("{}: {}".format(m["role"], m["content"]) for m in history[-6:])
-            usr = "이전 대화:\n{}\n\n질문: {}\n\n검색 질의:".format(convo, q)
-        else:
-            usr = "질문: {}\n\n검색 질의:".format(q)
-        try:
-            rewritten = self._llm("rewrite").complete(sys, usr).strip() or q
-        except L.LLMError:
-            raise
+        rewritten = rewrite_query(self._llm("rewrite"), q, history)
         return {"rewritten": rewritten,
                 "trace": [{"node": "rewrite", "before": q, "after": rewritten,
                            "latency_ms": int((time.time() - t0) * 1000)}]}

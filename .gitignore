@@ -12,10 +12,12 @@ data/*
 # ── 평가 산출물 — 성능표(eval/results/summary.md)만 공개 ──
 #   골든셋·원시 집계·검색결과 dump는 재생성 가능 + 원시로그라 제외.
 eval/goldenset.jsonl
+eval/goldenset_definition.jsonl
 eval/goldenset_build_stats.json
 eval/*.bak
 eval/results/*.json
 eval/results/*.jsonl
+eval/results/summary_*.md
 
 # ── 체크포인터·DB (대화기억 SQLite 등, 재생성 가능) ──
 *.sqlite
@@ -26,6 +28,9 @@ eval/results/*.jsonl
 
 # ── 로그 ──
 *.log
+
+# ── OS 메타파일 ──
+.DS_Store
 
 # ── 파이썬 ──
 __pycache__/

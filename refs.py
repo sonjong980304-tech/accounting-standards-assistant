@@ -45,6 +45,10 @@ RE_STANDARD_REF = re.compile(
 )
 # "문단 9, 문단 BC40, 문단 BC41"처럼 쉼표로 이어지는 추가 문단
 RE_PARA_CONT = re.compile(r"\s*[,，]\s*문단\s*(" + PARA_PATTERN + r")")
+# "문단 10~12"/"문단 B9~B31"처럼 물결표로 이어지는 범위(끝 번호는 "문단" 키워드 없이 등장)
+RE_PARA_RANGE = re.compile(r"\s*[~∼]\s*(" + PARA_PATTERN + r")")
+_LAST_INT = re.compile(r"\d+")
+MAX_RANGE_WIDTH = 50  # 이 폭을 넘으면 중간값 확장 없이 시작/끝만 추가(폭주 방지)
 # 용어정의 섹션 인용: "(제1109호 용어의 정의)" — 용어명 없는 섹션 수준 참조
 RE_TERMS_SECTION_REF = re.compile(r"제(\d{3,4})호[^\n]{0,10}?용어의 정의")
 # 일반기업회계기준 장(章) 참조: "제10장 '유형자산' 문단 10.14"
@@ -53,6 +57,53 @@ RE_KGAAP_REF = re.compile(
     r"(?:\s*'([^'\n]{1,40})')?"
     r"(?:[^\n]{0,15}?문단\s*(" + PARA_PATTERN + r"))?"
 )
+
+
+def _split_last_int(label):
+    """문단 라벨을 (접두, 마지막 정수, 꼬리)로 분해. 정수 없으면 None.
+
+    "B31" → ("B", 31, ""), "10.14" → ("10.", 14, ""), "7⑴" → ("", 7, "⑴").
+    """
+    ints = list(_LAST_INT.finditer(label))
+    if not ints:
+        return None
+    last = ints[-1]
+    return (label[:last.start()], int(last.group()), label[last.end():])
+
+
+def _expand_para_range(start_label, end_label, max_width=MAX_RANGE_WIDTH):
+    """물결표 범위("10~12", "B9~B31")의 시작·끝 문단 라벨을 확장.
+
+    같은 접두·꼬리 체계일 때만 중간 번호를 채운다(다르면 안전하게 두 끝만).
+    폭이 max_width를 넘으면 폭주 방지로 두 끝만 반환.
+    """
+    a, b = _split_last_int(start_label), _split_last_int(end_label)
+    if not a or not b or a[0] != b[0] or a[2] != b[2] or a[1] > b[1]:
+        return [start_label, end_label]
+    prefix, tail = a[0], a[2]
+    if b[1] - a[1] + 1 > max_width:
+        return [start_label, end_label]
+    return ["{}{}{}".format(prefix, n, tail) for n in range(a[1], b[1] + 1)]
+
+
+def _consume_para_extras(text, pos, para, key_fn, add):
+    """문단 뒤에 이어지는 물결표 범위·쉼표 나열을 소비하며 key_fn(para=...)를 add한다.
+
+    key_fn은 para 키워드만 받는 콜러블(예: lambda **kw: make_ref_key(std_no, **kw)).
+    다음 파싱 위치(int)를 반환.
+    """
+    rm = RE_PARA_RANGE.match(text, pos)
+    if rm:
+        for p in _expand_para_range(para, rm.group(1)):
+            add(key_fn(para=p))
+        pos = rm.end()
+    while True:
+        c = RE_PARA_CONT.match(text, pos)
+        if not c:
+            break
+        add(key_fn(para=c.group(1)))
+        pos = c.end()
+    return pos
 
 
 def make_ref_key(std_no, para=None, name=None):
@@ -191,14 +242,10 @@ def extract_refs(*texts):
                 add(make_ref_key(std_no, name=name))
             if para:
                 add(make_ref_key(std_no, para=para))
-                # 쉼표로 이어지는 추가 문단: "문단 9, 문단 BC40, 문단 BC41"
-                pos = m.end()
-                while True:
-                    c = RE_PARA_CONT.match(text, pos)
-                    if not c:
-                        break
-                    add(make_ref_key(std_no, para=c.group(1)))
-                    pos = c.end()
+                # 물결표 범위("문단 10~12") + 쉼표 나열("문단 9, 문단 BC40") 확장
+                _consume_para_extras(
+                    text, m.end(), para,
+                    lambda **kw: make_ref_key(std_no, **kw), add)
             if not name and not para:
                 add(make_ref_key(std_no))
         # 용어정의 섹션 참조 (예: "(제1109호 용어의 정의)")
@@ -211,13 +258,9 @@ def extract_refs(*texts):
                 add(make_kgaap_ref_key(chapter, name=name))
             if para:
                 add(make_kgaap_ref_key(chapter, para=para))
-                pos = m.end()
-                while True:
-                    c = RE_PARA_CONT.match(text, pos)
-                    if not c:
-                        break
-                    add(make_kgaap_ref_key(chapter, para=c.group(1)))
-                    pos = c.end()
+                _consume_para_extras(
+                    text, m.end(), para,
+                    lambda **kw: make_kgaap_ref_key(chapter, **kw), add)
             if not name and not para:
                 add(make_kgaap_ref_key(chapter))
     return refs

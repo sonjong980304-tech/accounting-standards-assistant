@@ -24,6 +24,31 @@ def tokenize(text, tokenizer):
     return tokenizer.tokenize(text.lower())
 
 
+def _rrf_merge(rank_lists, k=RRF_K):
+    """순위 리스트 여러 개(각각 id 시퀀스, 앞이 상위)를 RRF로 병합.
+
+    반환: [(id, score), ...] 점수 내림차순. 이종 검색기(BM25/dense) 점수
+    스케일이 달라도 순위만 쓰므로 비교 가능.
+    """
+    scores = {}
+    for lst in rank_lists:
+        for rank, _id in enumerate(lst):
+            scores[_id] = scores.get(_id, 0.0) + 1.0 / (k + rank + 1)
+    return sorted(scores.items(), key=lambda x: -x[1])
+
+
+def _bm25_candidates_for_collections(ids, doc_coll, scores, colls, per_coll):
+    """전체 코퍼스 BM25 점수에서 라우팅된 컬렉션(colls) 소속만 걸러 상위 id 반환.
+
+    self.bm25는 전 컬렉션 통합 인덱스이므로, retrieve_routed처럼 컬렉션이
+    한정된 호출에서는 대상 밖 문서를 먼저 제외한 뒤 순위를 매겨야 한다.
+    """
+    coll_set = set(colls)
+    pool = [(i, s) for i, c, s in zip(ids, doc_coll, scores) if c in coll_set]
+    pool.sort(key=lambda x: -x[1])
+    return [i for i, _ in pool[:per_coll * len(colls)]]
+
+
 class Index:
     """Chroma(dense) + rank_bm25(sparse)를 함께 여는 검색 인덱스."""
 
@@ -65,12 +90,8 @@ class Index:
     def search(self, query):
         dense_ids = self._dense(query)
         bm25_ids = self._bm25(query)
-        # RRF 병합 (순위 기반 → 이종 점수 문제 없음)
-        rrf = {}
-        for lst in (dense_ids, bm25_ids):
-            for rank, _id in enumerate(lst):
-                rrf[_id] = rrf.get(_id, 0.0) + 1.0 / (RRF_K + rank + 1)
-        fused = sorted(rrf.items(), key=lambda x: -x[1])
+        fused = _rrf_merge([dense_ids, bm25_ids])
+        rrf = dict(fused)
         pre = [i for i, _ in fused[:RERANK_N]]
         # 리랭킹
         pairs = [(query, self.docs[self.pos[i]]) for i in pre]
@@ -81,8 +102,13 @@ class Index:
             "post": reranked[:TOP],
         }
 
-    def retrieve_routed(self, query, collections, k=6, min_standards=1, per_coll=20):
-        """라우팅된 컬렉션만 대상으로 dense+리랭킹, 컬렉션 쿼터로 기준서 근거 보장.
+    def retrieve_routed(self, query, collections, k=6, min_standards=1, per_coll=20,
+                        use_bm25=False):
+        """라우팅된 컬렉션만 대상으로 검색+리랭킹, 컬렉션 쿼터로 기준서 근거 보장.
+
+        use_bm25=False(기본): 기존과 동일한 dense-only 후보 선정(회귀 보존).
+        use_bm25=True: 같은 컬렉션 범위 안에서 BM25 후보도 함께 뽑아 RRF로
+          dense와 병합 후 리랭킹(문단 번호·전문용어 등 lexical 신호 보강).
 
         반환: [{ref_key, doc_no, collection, text, score}] (리랭킹 점수 내림차순),
         단 *_standards 컬렉션이 라우팅에 있으면 기준서 근거를 최소 min_standards개 포함.
@@ -90,13 +116,23 @@ class Index:
         colls = [c for c in collections if c in self.colls] or self.colls
         qv = self.emb.encode([query], normalize_embeddings=True)[0].tolist()
         cand = []   # (id, coll)
+        dense_ids = []
         for cn in colls:
             r = self.client.get_collection(cn).query(
                 query_embeddings=[qv], n_results=per_coll, include=["distances"])
             for _id in r["ids"][0]:
                 cand.append((_id, cn))
+                dense_ids.append(_id)
         if not cand:
             return []
+        if use_bm25:
+            bm25_scores = self.bm25.get_scores(tokenize(query, self.emb.tokenizer))
+            bm25_ids = _bm25_candidates_for_collections(
+                self.ids, self.doc_coll, bm25_scores, colls, per_coll)
+            fused = _rrf_merge([dense_ids, bm25_ids])
+            dense_coll = dict(cand)   # id → coll (dense 후보분)
+            cand = [(i, dense_coll.get(i) or self.doc_coll[self.pos[i]])
+                    for i, _ in fused[:per_coll * len(colls)]]
         pairs = [(query, self.docs[self.pos[i]]) for i, _ in cand]
         scores = self.reranker.predict(pairs)
         ranked = sorted(zip(cand, scores), key=lambda x: -x[1])   # ((id,coll),score)

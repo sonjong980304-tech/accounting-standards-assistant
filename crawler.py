@@ -21,7 +21,7 @@ from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 
-from refs import extract_refs
+from refs import extract_intl_refs, extract_refs
 from parsers import ExtractError, extract_document_text
 
 warnings.filterwarnings("ignore")
@@ -303,7 +303,13 @@ def extract_standard_refs(detail):
     if detail.get("question") is None:
         # Q/A 분리 실패(body 폴백) 문서도 참조는 본문에서 최대한 추출
         sources.append(detail.get("body"))
-    return extract_refs(*sources)
+    refs = extract_refs(*sources)
+    seen = set(refs)
+    for r in extract_intl_refs(*sources):    # IFRS/IAS/IFRIC/SIC 국제표기 → 한국 기준서번호
+        if r not in seen:
+            seen.add(r)
+            refs.append(r)
+    return refs
 
 
 # ---------------------------------------------------------------- 상태/저장

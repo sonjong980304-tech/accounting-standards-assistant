@@ -25,6 +25,8 @@ import unicodedata
 from collections import defaultdict
 
 from rag import common as C
+from rag import llm as rag_llm
+from rag.graph import rewrite_query
 from rag.search import Index
 
 GOLD = C.ROOT / "eval" / "goldenset.jsonl"
@@ -70,6 +72,26 @@ def adjacent(a, b, n=1):
         return False
     return (pa[0] == pb[0] and pa[1] == pb[1] and pa[3] == pb[3]
             and pa[2] != pb[2] and abs(pa[2] - pb[2]) <= n)
+
+
+def expand_with_neighbors(hits_ref_keys, all_ref_keys):
+    """검색 결과 ref_key마다 실존하는 ±1 인접 문단을 코퍼스에서 찾아 함께 반환.
+
+    조작된(실존하지 않는) 문단번호는 추가하지 않는다 — all_ref_keys(코퍼스 전체
+    실제 ref_key 집합)에 있을 때만 인접 후보를 채택. parse_para가 None인 키
+    (용어정의 섹션 등)는 원본만 유지하고 스킵.
+    """
+    out = set(hits_ref_keys)
+    for ref in hits_ref_keys:
+        p = parse_para(ref)
+        if not p:
+            continue
+        ho, prefix, last, tail = p
+        for delta in (-1, 1):
+            cand = "{} 문단 {}{}{}".format(ho, prefix, last + delta, tail)
+            if cand in all_ref_keys:
+                out.add(cand)
+    return out
 
 
 def got_keys(metas):
@@ -123,9 +145,13 @@ def score(expected, got):
             hit_rate, exact_hits)
 
 
-def evaluate(index, golden, ks=(5, 10), per_coll=50, progress_every=50):
+def evaluate(index, golden, ks=(5, 10), per_coll=50, progress_every=50,
+            use_bm25=False, rewrite_llm=None):
+    """rewrite_llm이 주어지면(2번 기능) 검색 전 질의를 rewrite_query로 정규화.
+    use_bm25=True면(1번 기능) retrieve_routed가 BM25+dense RRF 하이브리드로 검색.
+    둘 다 기본 False → 기존 dense-only·raw-question 동작과 동일(회귀 보존)."""
     agg = {k: defaultdict(lambda: {"exact": [], "relaxed": [], "ho": [],
-                                   "hit": [], "prec": []})
+                                   "hit": [], "prec": [], "capped": []})
            for k in ks}
     self_excluded = 0
     kmax = max(ks)
@@ -135,9 +161,13 @@ def evaluate(index, golden, ks=(5, 10), per_coll=50, progress_every=50):
     for qi, g in enumerate(golden, 1):
         scoll = STD_COLL[g["board"]]
         tq = time.time()
+        query = g["question"]
+        if rewrite_llm is not None:
+            query = rewrite_query(rewrite_llm, query)
         # 기준서 컬렉션만 검색(질의회신 원천 제외). 넉넉히 kmax+3.
-        hits = index.retrieve_routed(g["question"], [scoll], k=kmax + 3,
-                                     min_standards=0, per_coll=per_coll)
+        hits = index.retrieve_routed(query, [scoll], k=kmax + 3,
+                                     min_standards=0, per_coll=per_coll,
+                                     use_bm25=use_bm25)
         dt = time.time() - tq
         if qi == 1 or qi % progress_every == 0 or qi == n:
             elapsed = time.time() - t_start
@@ -152,12 +182,17 @@ def evaluate(index, golden, ks=(5, 10), per_coll=50, progress_every=50):
         for k in ks:
             got = got_keys([h["meta"] for h in hits[:k]])
             ex, rel, ho, hitrate, nhit = score(exp, got)
+            # 달성가능 대비 recall: 정답이 k개보다 많은 질의는 완벽한 검색기라도
+            # exact recall이 min(정답수,k)/정답수로 캡핑됨(예: 정답34개→최대29%).
+            # exact를 대체하지 않고 "주어진 k 슬롯을 얼마나 잘 채웠나"를 병기.
+            capped = nhit / min(len(exp), k) if exp else 0.0
             for scope in (g["board"], "ALL"):
                 agg[k][scope]["exact"].append(ex)
                 agg[k][scope]["relaxed"].append(rel)
                 agg[k][scope]["ho"].append(ho)
                 agg[k][scope]["hit"].append(hitrate)
                 agg[k][scope]["prec"].append(nhit / k)
+                agg[k][scope]["capped"].append(capped)
         dump.append({"id": g["id"], "board": g["board"], "expected": exp,
                      "hits": [{"ref_key": h["meta"].get("ref_key", ""),
                                "section_key": h["meta"].get("section_key", "")}
@@ -175,6 +210,7 @@ def summarize(agg, ks):
                       "ho": round(avg(v["ho"]), 4),
                       "hit": round(avg(v["hit"]), 4),
                       "precision": round(avg(v["prec"]), 4),
+                      "capped": round(avg(v["capped"]), 4),
                       "n": len(v["exact"])}
                   for b, v in agg[k].items()}
     return out
@@ -196,6 +232,9 @@ def write_markdown(summary, ks, meta, path):
          "정확한 문단까지 회수. **가장 엄격**(표기 정규화 NFKC 적용하나 현재 데이터엔 효과 +0.0%p) |",
          f"| 문단 recall — 인접완화 | {a5['relaxed']:.3f} | {a10['relaxed']:.3f} | "
          "정답 문단은 1.0, **±1 인접 문단은 0.5**점. exact가 놓치는 '옆 문단' 회수를 반영(실용 하한) |",
+         f"| 문단 recall — 달성가능 대비 | {a5['capped']:.3f} | {a10['capped']:.3f} | "
+         "찾은 정답수 / **min(전체 정답수, k)**. 정답이 k개보다 많은 질의는 완벽한 검색기라도 "
+         "exact가 캡핑됨(예: 정답34개→최대29%) — \"주어진 k 슬롯을 얼마나 잘 채웠나\"를 잼 |",
          f"| 호 recall — 기준서 단위 | {a5['ho']:.3f} | {a10['ho']:.3f} | "
          "올바른 **기준서(제NNNN호)**를 찾았는가. **실질 성능에 가까움**. 단, 문단 정밀도는 못 잼 |",
          f"| 문단 hit rate — 1개↑ | {a5['hit']:.3f} | {a10['hit']:.3f} | "
@@ -240,21 +279,29 @@ def main():
     ap.add_argument("--sample", type=int, default=0, help="상위 N건만(0=전체)")
     ap.add_argument("--per-coll", type=int, default=50)
     ap.add_argument("--date", default="test")
+    ap.add_argument("--bm25", action="store_true",
+                    help="1번 기능: retrieve_routed에서 BM25+dense RRF 하이브리드 사용")
+    ap.add_argument("--rewrite", action="store_true",
+                    help="2번 기능: 검색 전 질의를 rewrite_query로 정규화(gpt-4o-mini 1회/건)")
     args = ap.parse_args()
 
     golden = [json.loads(l) for l in GOLD.open(encoding="utf-8")]
     if args.sample:
         golden = golden[:args.sample]
     prog = 5 if len(golden) <= 60 else 50
-    print(f"평가 대상 {len(golden)}건, Index 로드...", flush=True)
+    print(f"평가 대상 {len(golden)}건 · bm25={args.bm25} rewrite={args.rewrite} · Index 로드...",
+          flush=True)
     idx = Index()
+    rewrite_llm = rag_llm.get_llm("rewrite") if args.rewrite else None
     ks = (5, 10)
     t0 = time.time()
     agg, self_excluded, dump = evaluate(idx, golden, ks=ks, per_coll=args.per_coll,
-                                        progress_every=prog)
+                                        progress_every=prog, use_bm25=args.bm25,
+                                        rewrite_llm=rewrite_llm)
     summary = summarize(agg, ks)
     meta = {"n": len(golden), "self_excluded": self_excluded,
-            "per_coll": args.per_coll, "elapsed_s": round(time.time() - t0, 1)}
+            "per_coll": args.per_coll, "elapsed_s": round(time.time() - t0, 1),
+            "bm25": args.bm25, "rewrite": args.rewrite}
 
     RESULTS.mkdir(parents=True, exist_ok=True)
     (RESULTS / f"batch_{args.date}.json").write_text(
@@ -264,7 +311,7 @@ def main():
     with (RESULTS / f"retrieval_{args.date}.jsonl").open("w", encoding="utf-8") as f:
         for d in dump:
             f.write(json.dumps(d, ensure_ascii=False) + "\n")
-    write_markdown(summary, ks, meta, RESULTS / "summary.md")
+    write_markdown(summary, ks, meta, RESULTS / f"summary_{args.date}.md")
 
     a5, a10 = summary[5]["ALL"], summary[10]["ALL"]
     print(f"\n=== 결과 (n={meta['n']}, {meta['elapsed_s']}s, self제외 {self_excluded}) ===")
