@@ -9,6 +9,8 @@ BM25+dense 하이브리드 → RRF 병합 → cross-encoder 리랭커 재정렬 
 | cross-encoder 재순위화 근거 | Rodrigo Nogueira, Kyunghyun Cho, "Passage Re-ranking with BERT", arXiv:1901.04085 (2019). MS MARCO passage retrieval 리더보드에서 기존 SOTA 대비 MRR@10 27% 개선 | [arXiv:1901.04085](https://arxiv.org/abs/1901.04085) | 확정 |
 | BGE-M3(이 프로젝트가 쓰는 임베더) 원 논문 | Jianlv Chen, Shitao Xiao, Peitian Zhang, Kun Luo, Defu Lian, Zheng Liu, "M3-Embedding: Multi-Linguality, Multi-Functionality, Multi-Granularity Text Embeddings Through Self-Knowledge Distillation", arXiv:2402.03216 (2024-02) | [arXiv:2402.03216](https://arxiv.org/abs/2402.03216) | 확정 |
 | BM25/dense 하이브리드 일반 근거(BEIR) | Nandan Thakur, Nils Reimers, Andreas Rücklé, Abhishek Srivastava, Iryna Gurevych, "BEIR: A Heterogenous Benchmark for Zero-shot Evaluation of Information Retrieval Models", arXiv:2104.08663 (2021) | [arXiv:2104.08663](https://arxiv.org/abs/2104.08663) | 확정 |
+| `bge-reranker-v2-m3` 스펙(이 프로젝트가 쓰는 리랭커) | BAAI 공식, bge-m3 기반 경량 cross-encoder, 568M 파라미터, 다국어 지원, FP16 추론 지원 | [BAAI/bge-reranker-v2-m3 · Hugging Face](https://huggingface.co/BAAI/bge-reranker-v2-m3) | 확정 (HF 공식 모델 카드, 논문 아님) |
+| `bge-reranker-v2.5-gemma2-lightweight` 스펙(미채택 대안) | BAAI 공식, Gemma2-9B 기반, 토큰 압축·계층형 경량화 지원, BEIR·MIRACL 벤치마크에서 SOTA 달성(공개일 2024-07-26) | [BAAI/bge-reranker-v2.5-gemma2-lightweight · Hugging Face](https://huggingface.co/BAAI/bge-reranker-v2.5-gemma2-lightweight) | 확정 (HF 공식 모델 카드, 논문 아님) |
 
 ## 각 논문이 실제로 뒷받침하는 주장
 
@@ -16,6 +18,12 @@ BM25+dense 하이브리드 → RRF 병합 → cross-encoder 리랭커 재정렬 
 - **BERT 재순위화 (Nogueira & Cho 2019)**: 1차 검색(BM25 등) 결과를 cross-encoder(질의+문서를 함께 인코딩)로 다시 채점하면 성능이 크게 오른다는 것을 MS MARCO에서 실증. "1차로 넓게 후보를 모으고, 2차로 비싼 모델이 정밀 재채점한다"는 이 프로젝트의 2단계 구조(retrieve→rerank)와 정확히 같은 패턴.
 - **BGE-M3 (Chen et al. 2024)**: 이 프로젝트가 쓰는 임베딩 모델(`BAAI/bge-m3`) 자체의 논문. Abstract에서 "dense retrieval, multi-vector retrieval, sparse retrieval을 하나의 모델로 동시에 수행할 수 있다"고 명시 — 즉 **BGE-M3는 설계 단계부터 dense+sparse(BM25류) 하이브리드를 염두에 둔 모델**이다. 단, abstract 자체에 "하이브리드가 단일 방식보다 몇 %p 낫다"는 구체 수치는 없음(자기지식증류 학습기법이 핵심 기여) — 이 부분은 abstract 범위에서 확인 안 됨(과장하지 않음).
 - **BEIR (Thakur et al. 2021)**: 18개 도메인 벤치마크에서 BM25가 여전히 강건한 baseline이며, dense/sparse 모델이 계산은 효율적이지만 일반화(도메인 이동) 성능이 떨어지는 경우가 많다는 결과. 이는 "dense만으로는 부족할 수 있어 BM25를 함께 쓴다"는 하이브리드 설계의 일반적 근거는 되지만, **RRF+rerank 조합이 우수하다는 직접 실험 결과는 이 논문 범위 밖**(정직하게 병기).
+
+## 리랭커 모델 선택 근거 (v2-m3 vs v2.5-gemma2-lightweight)
+
+BAAI는 v2 세대 리랭커를 용도별로 나눠 배포한다 — 다국어·효율성 용도로 `bge-reranker-v2-m3`(568M)·`bge-reranker-v2-gemma`를, 최고 성능(BEIR·MIRACL SOTA) 용도로 `bge-reranker-v2.5-gemma2-lightweight`(Gemma2-9B 기반, 토큰 압축 지원)를 권장한다. 이 프로젝트는 개발·서빙 환경이 **맥미니(Apple M4, 통합메모리 16GB)**라 후자를 채택하지 않았다 — 9B 파라미터는 fp16 가중치만으로 약 18GB(9B×2byte, 단순 산술)로 16GB 통합메모리를 그 자체로 초과한다. `v2-m3`는 568M(fp16 약 1.1GB)이라 임베더(BGE-M3)와 함께 올려도 실측 피크 메모리가 RSS 기준 ~3.1GB(최악 ~6GB)로 여유가 있다. "최고 성능"이 아니라 **"이 하드웨어에서 로컬 구동이 가능한가"**를 기준으로 한 선택이다.
+
+※ 이 두 항목의 출처는 논문이 아니라 BAAI 공식 HuggingFace 모델 카드다(factcheck 우선순위상 "공식 개발자 문서/공식 레포" 등급, 원논문보다 한 단계 아래). 파라미터→메모리 환산(9B×2byte≈18GB)은 표준 fp16 산술이며 BAAI가 공식 발표한 수치는 아니다.
 
 ## 이 프로젝트 아키텍처와의 관계
 

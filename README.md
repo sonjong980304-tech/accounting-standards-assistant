@@ -114,6 +114,8 @@ flowchart LR
 
 > 근거 문헌: RRF의 등수기반 병합은 Cormack et al.(SIGIR 2009), cross-encoder 재순위화 효과는 Nogueira & Cho(2019), 이 프로젝트가 쓰는 BGE-M3 자체가 dense+sparse+multi-vector를 한 모델로 지원하도록 설계됐다는 점은 Chen et al.(2024, arXiv:2402.03216) 참조. 1차 출처 대조와 각 문헌이 정확히 뒷받침하는 범위(과장 없이)는 [`docs/references_search_architecture.md`](docs/references_search_architecture.md)에 정리.
 
+**`bge-reranker-v2-m3`(568M)를 고른 이유 — 개발·서빙 환경(맥미니, Apple M4, 통합메모리 16GB) 제약:** BAAI 리랭커 라인업 중 벤치마크(BEIR·MIRACL)에서 더 높은 점수를 내는 모델(`bge-reranker-v2.5-gemma2-lightweight`, Gemma2-9B 기반)도 있지만 채택하지 않았습니다. 9B 파라미터는 fp16 가중치만으로도 약 18GB(9B×2byte)라 **이 맥미니의 통합메모리 16GB를 그 자체로 초과**합니다(임베더·ChromaDB·OS까지 얹으면 더 빠듯해짐). 반면 `bge-reranker-v2-m3`는 568M이라 fp16 가중치가 약 1.1GB에 불과하고, 임베더(BGE-M3)와 함께 올려도 실측 피크 메모리가 RSS 기준 ~3.1GB(최악 시나리오 ~6GB)로 16GB 안에 여유 있게 들어갑니다. "최고 성능"보다 **"이 하드웨어에서 로컬 구동이 가능한가"**를 우선한 선택입니다.
+
 ### 벡터DB
 `ChromaDB`를 쓰고 **4개 컬렉션으로 분리**했습니다. 이 분리는 곧 라우팅 단위입니다. 초기에 한 컬렉션에 다 넣었더니 질의회신이 상위 결과를 독식해(질문과 문체가 비슷해 유사도가 높음) 정작 정답인 기준서 문단을 밀어냈습니다. 컬렉션을 나누고 라우터가 대상을 고르게 하니 이 편향이 크게 줄었습니다.
 
