@@ -39,36 +39,76 @@
 
 ## 3. 시스템 아키텍처
 
-LangGraph로 **5개 노드 파이프라인 + 참고용 사이드카 1개**를 연결하고, SQLite 체크포인터로 대화 맥락을 이어갑니다. 검색은 **4개 컬렉션**(기준서 2 + 질의회신 2, 전부 한국회계기준원 KASB 자료)으로 분리해, 라우터가 질문 성격에 맞는 컬렉션만 고르게 했습니다. 이와 완전히 별도로, 금융감독원 **감리지적사례**(65건)를 답변 근거와 격리된 참고 정보로 병행 조회합니다.
+LangGraph 5개 노드가 질문을 처리하고, 별도 사이드카 1개가 참고 정보를 곁들입니다. 검색은 4개 컬렉션(기준서 2 + 질의회신 2, 전부 KASB 자료)으로 나눠 라우터가 필요한 곳만 고르게 했고, SQLite 체크포인터로 대화 맥락을 이어갑니다. 점선으로 표시한 경로는 답변 근거로 쓰이지 않는 **참고 전용** 흐름입니다.
 
 ```mermaid
-flowchart LR
-    Q([질문]) --> E{이전 대화<br/>있음?}
-    E -->|첫 질문| RT[route<br/>컬렉션 라우팅]
-    E -->|후속질문| RW1[rewrite<br/>맥락 반영 재작성]
-    RW1 --> RT
-    RT --> RE[retrieve<br/>BM25+dense→RRF→리랭킹]
-    RT --> AL[audit_lookup<br/>감리지적사례 조회]
-    RE --> S{top 리랭커<br/>점수 ≥0.6?}
-    S -->|충분| AN[answer<br/>근거 기반 생성·인용]
-    S -->|부족: 1회만 재시도| RW2[rewrite<br/>재시도 재작성]
-    RW2 --> RE
-    AL -.참고만.-> AN
-    AN --> VF[verify<br/>근거 원문 재조회]
-    VF --> OUT([답변 + 근거 원문])
+flowchart TD
+    Q(["질문"]) --> E{"이전 대화<br/>있음?"}
 
-    RE ---|검색 대상| DB[(ChromaDB · 4개 컬렉션<br/>기준서 2 + 질의회신 2)]
-    AL ---|조회 대상| AC[(audit_cases<br/>감리지적사례 65건)]
-    RW1 -.대화기억.-> CK[(SQLite<br/>체크포인터)]
+    subgraph SG1["① 질의 처리"]
+        direction TB
+        RW1["rewrite"]
+        RT["route"]
+    end
+
+    E -->|"후속질문"| RW1
+    RW1 --> RT
+    E -->|"첫 질문"| RT
+
+    subgraph SG2["② 검색"]
+        direction TB
+        RE["retrieve"]
+        S{"점수<br/>충분?"}
+        RW2["rewrite"]
+    end
+
+    RT --> RE
+    RE --> S
+    S -->|"부족: 1회 재시도"| RW2
+    RW2 --> RE
+
+    subgraph SG3["③ 생성·검증"]
+        direction TB
+        AN["answer"]
+        VF["verify"]
+    end
+
+    S -->|"충분"| AN
+    AN --> VF
+    VF --> OUT(["답변 + 근거 원문"])
+
+    AL["audit_lookup"]
+    RT -.-> AL
+    AL -.->|"참고만"| AN
+
+    subgraph SG4["④ 저장소"]
+        direction TB
+        DB[("ChromaDB<br/>4개 컬렉션")]
+        AC[("audit_cases<br/>65건")]
+        CK[("SQLite<br/>체크포인터")]
+    end
+
+    RE --- DB
+    AL -.- AC
+    RW1 -.-> CK
     AN -.-> CK
 
-    style RW1 fill:#dbeafe,stroke:#3b82f6
-    style RW2 fill:#dbeafe,stroke:#3b82f6
-    style AL fill:#fef3c7,stroke:#d97706
-    style AC fill:#fef3c7,stroke:#d97706
+    style AL stroke:#f59e0b,stroke-width:2px,stroke-dasharray: 4 3
+    style AC stroke:#f59e0b,stroke-width:2px,stroke-dasharray: 4 3
 ```
 
-> ※ `rewrite`는 실제로는 하나의 노드입니다 — 위 그림에서는 진입 시점(후속질문 맥락 반영 vs 검색 실패 재시도)에 따라 편의상 두 번 나눠 그렸습니다. `rewrite`·`route`·`answer`는 기본 GPT(`gpt-4o-mini`/`gpt-5.5`)가 처리하고, 로컬 모드에서는 EXAONE 3.5가 대신합니다. 노란 박스(`audit_lookup`/`audit_cases`)는 답변 근거로 쓰이지 않는 참고용 사이드카입니다.
+> ※ `rewrite`는 실제로는 하나의 노드입니다 — 그림에서는 진입 시점(후속질문 맥락 반영 vs 검색 실패 재시도)에 따라 편의상 두 번 나눠 그렸습니다. `rewrite`·`route`·`answer`는 기본 GPT(`gpt-4o-mini`/`gpt-5.5`)가 처리하고, 로컬 모드에서는 EXAONE 3.5가 대신합니다. 점선 테두리(`audit_lookup`/`audit_cases`)는 답변 근거로 쓰이지 않는 참고 전용 경로입니다.
+
+| 노드 | 역할 | 핵심 기술 |
+|---|---|---|
+| `rewrite` | 질문을 검색 친화적으로 재작성(후속질문 맥락 반영 또는 검색 실패 시 1회 재시도) | GPT `gpt-4o-mini` / 로컬 EXAONE 3.5 |
+| `route` | 질문 성격(K-IFRS/일반기업)에 맞는 컬렉션 선택, 모호하면 양쪽 다 포함 | GPT `gpt-4o-mini` / 로컬 EXAONE 3.5 |
+| `retrieve` | 하이브리드 검색 + 리랭킹, 라우팅된 기준서 컬렉션마다 최소 1건 보장 | BM25 + BGE-M3 dense → RRF → `bge-reranker-v2-m3` |
+| `answer` | 검색 근거만으로 답변 생성, 근거 식별자를 문장에 인용 | GPT `gpt-5.5` / 로컬 EXAONE 3.5 |
+| `verify` | 답변이 인용한 근거를 DB에서 원문 그대로 재조회 | ChromaDB 직접 조회(LLM 재생성 없음) |
+| `audit_lookup` (사이드카) | 금융감독원 감리지적사례 참고 조회 — 답변 근거로 절대 미사용 | ChromaDB `audit_cases` 컬렉션(65건) |
+
+**노드별 상세**
 
 - **rewrite**: 이전 대화를 반영해 질문을 검색에 유리하게 다시 씁니다. **조건부로 동작합니다** — 히스토리(후속질문)가 있으면 route 전에 무조건 실행하고(맥락 해소는 검색 점수와 무관하게 항상 필요), 히스토리가 없는 첫 질문은 route→retrieve를 먼저 시도한 뒤 **1차 검색 결과의 top 리랭커 점수가 0.6 미만일 때만** rewrite→retrieve로 재시도합니다(1회 한정, 무한루프 방지 — 재시도해도 다시 낮으면 그대로 answer로 넘어감). GPT(`gpt-4o-mini`) 기본, 로컬 모드에서는 EXAONE가 대신 처리합니다.
 - **route**: K-IFRS/일반기업 신호를 보고 검색할 컬렉션을 고릅니다. 신호가 모호하면 한쪽으로 좁히지 않고 양쪽 기준서·질의회신을 모두 검색해, 정답 컬렉션을 통째로 놓치는 일을 막습니다. rewrite와 마찬가지로 로컬 모드에서는 EXAONE가 처리합니다.
