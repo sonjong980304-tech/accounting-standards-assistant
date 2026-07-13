@@ -358,7 +358,7 @@ EXAONE가 배포판에서 빠지는 이유는 구동 방식 때문입니다. EXA
 - **일반기업회계기준** (장·문단)
 - **질의회신** (K-IFRS / 일반기업 각 게시판)
 
-> **저작권 안내:** 기준서·질의회신 **원문의 저작권은 한국회계기준원(KASB)에 있습니다.** 이 저장소에는 코드와 **데이터 구조를 보여주는 소량 샘플**(`data/sample/`, 게시판·기준서별 2~3건)만 포함합니다. 전체 데이터는 저장소에 담지 않으며, 크롤러(`crawler.py`, `standards_crawler.py`)로 공식 출처에서 직접 수집해 재현할 수 있습니다. 상세 재현 절차는 `data/sample/`의 구조와 크롤러 스크립트를 참고하세요.
+> **저작권 안내:** 기준서·질의회신 **원문의 저작권은 한국회계기준원(KASB)에 있습니다.** 이 저장소에는 코드와 **데이터 구조를 보여주는 소량 샘플**(`data/sample/`, 게시판·기준서별 2~3건)만 포함합니다. 전체 데이터는 저장소에 담지 않으며, 크롤러(`crawl/crawler.py`, `crawl/standards_crawler.py`)로 공식 출처에서 직접 수집해 재현할 수 있습니다. 상세 재현 절차는 `data/sample/`의 구조와 크롤러 스크립트를 참고하세요.
 
 ---
 
@@ -374,10 +374,13 @@ rag/            # RAG 파이프라인 (LangGraph)
   ├─ sync_audit_cases.py       # 감리지적사례 동기화(audit-sentinel → audit_cases 컬렉션)
   ├─ install_audit_scheduler.sh # 감리사례 분기별 갱신 크론 등록(--print/--install)
   └─ eval/         # RAGAS 평가 (배치 + 실시간 판사) + 감리사례 검증(스모크테스트/표본검토)
-crawler.py            # 질의회신 크롤러
-standards_crawler.py  # 기준서 크롤러
-parsers/              # HWP/PDF 파서
-data/sample/          # 공개용 소량 샘플 (구조 예시)
+crawl/                 # 크롤러
+  ├─ crawler.py           # 질의회신 크롤러
+  └─ standards_crawler.py # 기준서 크롤러
+scripts/               # 일회성 수집·유지보수 드라이버 (run_qa_all·run_std·reparse_qa·join_eval)
+refs.py                # ref_key 정규화 공용 코어 (crawl·parsers 양쪽이 참조)
+parsers/               # HWP/PDF 파서
+data/sample/           # 공개용 소량 샘플 (구조 예시)
 eval/results/summary.md   # 검색 성능표
 ```
 

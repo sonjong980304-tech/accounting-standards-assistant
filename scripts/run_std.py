@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """기준서 게시판 전체 수집 드라이버 (warning 로그 캡처 포함).
 
-사용법: python3 -u run_std.py 3001
+사용법: python3 -u -m scripts.run_std 3001
 - crawl_standards로 잔여 전체 수집 (state/ 재개, raw/ 보관)
 - 문단 체계 warning(kasb.parsers)을 data/std_warnings_<board>.log + stdout에 기록
 """
 import logging
 import sys
 
-from crawler import DATA
-from standards_crawler import STD_BOARDS, crawl_standards
+from crawl.crawler import DATA
+from crawl.standards_crawler import STD_BOARDS, crawl_standards
 
 board = sys.argv[1] if len(sys.argv) > 1 else "3001"
 

@@ -5,7 +5,7 @@
 reparse_qa.py --all-records 재실행 시 소실됨(016002 골든셋 142→123건으로 감소해 발견).
 extract_standard_refs 파이프라인에 영구 통합해 재발을 막는다.
 """
-from crawler import extract_standard_refs
+from crawl.crawler import extract_standard_refs
 
 
 def _detail(question=None, answer=None, related=None, body=None):

@@ -8,7 +8,7 @@ import json
 import re
 
 BOARDS = ["016001", "016002", "016003", "016005", "016006"]
-DATA = __import__("pathlib").Path(__file__).resolve().parent / "data" / "parsed"
+DATA = __import__("pathlib").Path(__file__).resolve().parent.parent / "data" / "parsed"
 
 
 def load_std_index():

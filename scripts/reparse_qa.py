@@ -13,7 +13,7 @@ import glob
 import json
 from pathlib import Path
 
-from crawler import (
+from crawl.crawler import (
     BOARDS, DATA, extract_standard_refs, log_failure, parse_detail,
     split_oldcard_qa, split_qa,
 )

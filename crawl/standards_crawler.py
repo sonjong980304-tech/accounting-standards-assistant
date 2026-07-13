@@ -5,8 +5,8 @@
 첨부(HWP+PDF)가 목록에서 바로 노출된다.
 
 사용법:
-    python3 standards_crawler.py --board 3001 --match "제1109호|제1116호" --limit 3
-    python3 standards_crawler.py --board 3001 --all
+    python3 -m crawl.standards_crawler --board 3001 --match "제1109호|제1116호" --limit 3
+    python3 -m crawl.standards_crawler --board 3001 --all
 """
 import argparse
 import json
@@ -15,7 +15,7 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
-from crawler import BASE_URL, DATA, KasbClient, log_failure, now_iso, sanitize_filename
+from crawl.crawler import BASE_URL, DATA, KasbClient, log_failure, now_iso, sanitize_filename
 from parsers import (
     ExtractError,
     extract_document_text,
