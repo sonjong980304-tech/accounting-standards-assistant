@@ -3,9 +3,9 @@
 
 작업 순서 2단계: 단일 게시판(List016005) 크롤러.
 사용법:
-    python3 crawler.py --board 016005 --limit 3          # 3건 테스트
-    python3 crawler.py --board 016005 --pages 1          # 1페이지
-    python3 crawler.py --board 016005 --all              # 전체
+    python3 -m crawl.crawler --board 016005 --limit 3    # 3건 테스트
+    python3 -m crawl.crawler --board 016005 --pages 1    # 1페이지
+    python3 -m crawl.crawler --board 016005 --all        # 전체
 """
 import argparse
 import json
@@ -33,7 +33,7 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 FAILURES_LOG = ROOT / "failures.log"
 

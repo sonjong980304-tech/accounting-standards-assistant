@@ -11,7 +11,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from crawler import DATA, FAILURES_LOG, FallbackGuardTripped, crawl_board
+from crawl.crawler import DATA, FAILURES_LOG, FallbackGuardTripped, crawl_board
 
 BOARD_ORDER = ["016001", "016002", "016003", "016005", "016006"]
 MAX_FALLBACK_RATIO = 0.05
