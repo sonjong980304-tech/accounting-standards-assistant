@@ -41,6 +41,30 @@ AUDIT_CASE_SCORE_THRESHOLD = 0.6
 RETRY_SCORE_THRESHOLD = 0.6
 
 
+_CITATION_RE = re.compile(r"\[([^\[\]]+)\]")
+
+
+def _extract_citations(text):
+    return _CITATION_RE.findall(text or "")
+
+
+def _find_invalid_citations(text, valid):
+    return list(dict.fromkeys(c for c in _extract_citations(text) if c not in valid))
+
+
+def _strip_invalid_citations(text, valid):
+    def _sub(m):
+        return m.group(0) if m.group(1) in valid else ""
+    stripped = _CITATION_RE.sub(_sub, text or "")
+    return re.sub(r"[ \t]{2,}", " ", stripped).strip()
+
+
+def _needs_citation_retry(text, valid, refusal_text):
+    if refusal_text[:8] in (text or "") or len(text or "") < 15:
+        return False
+    return bool(_find_invalid_citations(text, valid))
+
+
 def _need_rewrite_retry(retrieved, already_retried):
     if already_retried:
         return False
@@ -290,7 +314,13 @@ class Pipeline:
 
     def answer(self, state: State):
         """근거만 사용, 평문 답변 + 인용은 [ref_key] 인라인. LangChain 모델이라
-        graph.stream(stream_mode='messages')로 토큰이 UI에 스트리밍된다."""
+        graph.stream(stream_mode='messages')로 토큰이 UI에 스트리밍된다.
+
+        로컬(EXAONE) 경로만: 근거에 없는 식별자를 지어내 인용하면(Faithfulness 저하의
+        핵심 원인, compare_models.py·베이스라인 30건 실측으로 확인) 무효 식별자를 알려주는
+        피드백을 붙여 딱 1회만 재생성하고, 그래도 남으면 최종 텍스트에서 제거한다(안전망).
+        GPT 경로는 건드리지 않는다(엄격 인용 유지 — 5/5 회귀 방지).
+        """
         t0 = time.time()
         q, hits = state["question"], state.get("retrieved", [])
         if not hits:
@@ -298,37 +328,65 @@ class Pipeline:
         ctx = "\n\n".join(
             "[{}] ({}) {}".format(h["ref_key"] or h["doc_no"], h["collection"],
                                   _clip(h["text"], 700)) for h in hits)
-        sys = ("너는 한국 회계기준 답변가다. 아래 '근거'만 사용해 한국어로 답한다. "
-               "근거에 없는 내용은 지어내지 말 것. 인용은 반드시 근거의 대괄호 식별자를 "
-               "그대로 [식별자] 형태로 문장에 넣는다(예: [제1116호 문단 7]). "
-               "근거만으로 답할 수 없으면 다른 말 없이 정확히 '{}'만 출력한다."
-               .format(self.REFUSAL))
+        valid = {h["ref_key"] or h["doc_no"] for h in hits}
+        sys = self._answer_system_prompt()
         usr = "질문: {}\n\n근거:\n{}".format(q, ctx)
         model = L.answer_chat_model(local=self.local, api_key=self.api_key)
         mname = L.LOCAL_MODEL if self.local else L.MODELS["answer"]
-        resp = model.invoke(
-            [("system", sys), ("human", usr)],
-            config={"run_name": "answer", "tags": ["node:answer", "model:" + mname],
-                    "metadata": {"node": "answer", "model": mname}})
-        text = (resp.content or "").strip()
+
+        def _call(user_msg):
+            resp = model.invoke(
+                [("system", sys), ("human", user_msg)],
+                config={"run_name": "answer", "tags": ["node:answer", "model:" + mname],
+                        "metadata": {"node": "answer", "model": mname}})
+            return (resp.content or "").strip()
+
+        text = _call(usr)
+        if self.local and _needs_citation_retry(text, valid, self.REFUSAL):
+            invalid = _find_invalid_citations(text, valid)
+            retry_usr = usr + (
+                "\n\n[검증 실패] 다음 식별자는 근거 목록에 없어 무효합니다: {}. "
+                "근거 목록에 실제로 있는 대괄호 식별자만 사용해 답변을 다시 작성하라."
+            ).format(", ".join(invalid))
+            text = _call(retry_usr)
+        if self.local:
+            text = _strip_invalid_citations(text, valid)
+
         # 인용 추출: 검색된 유효 ref만 used_refs로 (환각 인용 방지)
-        valid = {h["ref_key"] or h["doc_no"] for h in hits}
-        cited = list(dict.fromkeys(c for c in re.findall(r"\[([^\[\]]+)\]", text)
-                                   if c in valid))
+        cited = list(dict.fromkeys(c for c in _extract_citations(text) if c in valid))
         refused = self.REFUSAL[:8] in text or len(text) < 15
         if self.local:
             # 로컬(EXAONE): 긴 컨텍스트에서 [ref_key] 인용 준수가 약함 → 인용 형식은
             # 완화하고 '실질 답변(모델이 refusal 안 함)'이면 채택. 근거가 정말 없어
             # 모델이 refusal하면(미국세법 등) 그대로 유지(환각방지 목적 보존).
-            # used_refs: EXAONE 인용 중 검색된 것 우선, 없으면 top 근거로 best-effort.
+            # used_refs는 실제로 유효하게 인용한 것만(임의 top-1 대체 없음 — 모델이 실제로
+            # 쓰지 않은 근거를 UI에 근거로 제시하던 문제 수정).
             has = not refused
-            used = cited or ([hits[0]["ref_key"] or hits[0]["doc_no"]] if has else [])
+            used = cited
         else:
             # GPT: 엄격 유지 (유효 인용 필수) — 손대지 않음 (5/5 회귀 방지)
             has = bool(cited) and not refused
             used = cited if has else []
         ans_text = text if has else self.REFUSAL
         return self._finish_answer(state, q, ans_text, used, has, t0)
+
+    # 시스템 프롬프트에 인용 규칙을 추가로 강조하는 시도(v1: 부정지시 2개+예시,
+    # v2: 최소 지시 1개)는 둘 다 폐기됨. v1은 지어낸 인용을 100% 제거했으나 refusal이
+    # 25%→58%로 급증(격리실험 48건, isolate_prompt_effect_results.jsonl). v2로 지시를
+    # 축소해도 8문항 격리실험(고정 컨텍스트)에서는 25%→25%로 회복됐지만, 30문항 전체
+    # 재현(exaone_after_v2_results.jsonl)에서는 refusal 33%→43%·평균 Faithfulness
+    # 0.900→0.794로 오히려 baseline보다 나빠짐 — idx=0/11 원문 분석 결과, 지시가 있으면
+    # 모델이 "확신 없는 인용은 아예 생략"하는 쪽으로 과잉 방어해 근거 없는 서술이 늘어남.
+    # 결론: 프롬프트 지시는 완전히 제거하고, 지어낸 인용 방지는 아래 코드 레벨
+    # retry+strip(_needs_citation_retry/_strip_invalid_citations)만으로 처리한다
+    # (프롬프트 없이도 지어낸 인용 0건 확인됨 — GPT/로컬 시스템 프롬프트 동일).
+
+    def _answer_system_prompt(self):
+        return ("너는 한국 회계기준 답변가다. 아래 '근거'만 사용해 한국어로 답한다. "
+                "근거에 없는 내용은 지어내지 말 것. 인용은 반드시 근거의 대괄호 식별자를 "
+                "그대로 [식별자] 형태로 문장에 넣는다(예: [제1116호 문단 7]). "
+                "근거만으로 답할 수 없으면 다른 말 없이 정확히 '{}'만 출력한다."
+                .format(self.REFUSAL))
 
     def _finish_answer(self, state, q, ans_text, used_refs, has_grounds, t0):
         ans = {"answer": ans_text, "used_refs": used_refs, "has_grounds": has_grounds}
