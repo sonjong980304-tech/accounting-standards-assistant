@@ -33,9 +33,10 @@ def load_index():
     return Index()
 
 
-def make_graph(api_key, local):
+def make_graph(api_key, local, vendor=None, local_model=None):
     from rag.graph import build_graph
-    return build_graph(load_index(), checkpoint_path=CKPT, api_key=api_key, local=local)
+    return build_graph(load_index(), checkpoint_path=CKPT, api_key=api_key,
+                       local=local, vendor=vendor, local_model=local_model)
 
 
 # 기준서 게시판 목록 URL (상세 View는 POST 방식이라 직접 링크 불가 → 게시판으로 안내).
@@ -237,61 +238,81 @@ def render_eval(eval_cfg, question, ans, retrieved):
 # ---------------------------------------------------------------- 사이드바
 def sidebar():
     st.sidebar.title("⚙️ 설정")
-    st.sidebar.markdown("**API 키**")
-    key_in = st.sidebar.text_input("OpenAI API 키", type="password",
-                                   help="세션에만 보관, 파일·로그 저장 안 함",
-                                   value=st.session_state.get("api_key", ""))
-    if key_in:
-        st.session_state.api_key = key_in   # session_state만 (파일 저장 금지)
-    import os
-    env_key = bool(os.environ.get("OPENAI_API_KEY"))
-    # 우선순위: 입력 > env > .env
-    eff_key = st.session_state.get("api_key") or None
-    if eff_key:
-        st.sidebar.success("입력 키 사용 중 (세션 메모리)")
-    elif env_key:
-        st.sidebar.info("환경변수/.env 키 사용")
-    else:
-        st.sidebar.warning("키 없음 — 입력하거나 GPT 대신 로컬 모델을 쓰세요.")
 
     st.sidebar.markdown("**모델**")
-    # 배포 환경(KASB_CLOUD)은 GPT만 지원 — EXAONE는 Ollama 로컬 구동이라 관리형 호스팅 불가.
-    if os.environ.get("KASB_CLOUD"):
-        st.sidebar.radio("모델 선택", ["GPT (기본)"], captions=["gpt-4o-mini + gpt-5.5"])
-        st.sidebar.caption("☁️ 배포 환경에서는 GPT만 지원합니다 "
-                           "(EXAONE는 로컬 전용 — 저장소를 클론해 로컬에서 사용).")
-        local = False
+    # 배포 환경(KASB_CLOUD)은 EXAONE만 제외 — Ollama 로컬 구동이라 관리형 호스팅 불가.
+    # Gemini는 GPT처럼 API 기반이라 배포 환경에서도 지원 가능.
+    cloud = bool(os.environ.get("KASB_CLOUD"))
+    if cloud:
+        options = ["GPT (기본)", "Gemini"]
+        captions = ["gpt-4o-mini + gpt-5.5", "gemini-2.5-flash-lite + gemini-2.5-flash"]
     else:
-        mode = st.sidebar.radio("모델 선택", ["GPT (기본)", "로컬 EXAONE"],
-                                captions=["gpt-4o-mini + gpt-5.5", "EXAONE 3.5 (Ollama)"])
-        local = mode.startswith("로컬")
-        if local:
-            try:
-                L.check_ollama_model(L.LOCAL_MODEL)
-                st.sidebar.success(f"로컬 모델 준비됨: {L.LOCAL_MODEL}")
-            except L.LLMError as e:
-                st.sidebar.error(str(e))
-                local = "unavailable"
+        options = ["GPT (기본)", "로컬 EXAONE", "Gemini"]
+        captions = ["gpt-4o-mini + gpt-5.5", "EXAONE 3.5 (Ollama)",
+                    "gemini-2.5-flash-lite + gemini-2.5-flash"]
+    mode = st.sidebar.radio("모델 선택", options, captions=captions)
+    local = mode.startswith("로컬")
+    llm_vendor = "google" if mode == "Gemini" else None
+    if cloud:
+        st.sidebar.caption("☁️ 배포 환경에서는 EXAONE를 지원하지 않습니다 "
+                           "(로컬 전용 — 저장소를 클론해 로컬에서 사용).")
+    local_model = None
+    if local:
+        try:
+            L.check_ollama_model(L.LOCAL_MODEL)
+            st.sidebar.success(f"로컬 모델 준비됨: {L.LOCAL_MODEL}")
+        except L.LLMError as e:
+            st.sidebar.error(str(e))
+            local = "unavailable"
+
+    st.sidebar.markdown("**API 키**")
+    if local:
+        st.sidebar.caption("로컬 모델은 API 키가 필요 없습니다.")
+        eff_key = None
+    else:
+        key_label = "Google (Gemini) API 키" if llm_vendor == "google" else "OpenAI API 키"
+        key_state = "google_api_key" if llm_vendor == "google" else "api_key"
+        env_var = "GOOGLE_API_KEY" if llm_vendor == "google" else "OPENAI_API_KEY"
+        key_in = st.sidebar.text_input(key_label, type="password",
+                                       help="세션에만 보관, 파일·로그 저장 안 함",
+                                       value=st.session_state.get(key_state, ""))
+        if key_in:
+            st.session_state[key_state] = key_in   # session_state만 (파일 저장 금지)
+        env_key = bool(os.environ.get(env_var))
+        # 우선순위: 입력 > env > .env
+        eff_key = st.session_state.get(key_state) or None
+        if eff_key:
+            st.sidebar.success("입력 키 사용 중 (세션 메모리)")
+        elif env_key:
+            st.sidebar.info("환경변수/.env 키 사용")
+        else:
+            st.sidebar.warning("키 없음 — 입력하거나 로컬 모델을 쓰세요."
+                               if not cloud else "키 없음 — 입력해주세요.")
 
     # 답변 품질 평가 (B트랙, 기본 off — 체크 안 하면 어떤 평가 호출도 없음)
     st.sidebar.divider()
     eval_on = st.sidebar.checkbox("🔍 답변 품질 평가", value=False,
                                   help="체크 시에만 판사 LLM이 호출됩니다 (속도·비용 영향)")
     eval_cfg = {"on": eval_on}
-    # 답변 모델 벤더: GPT=OpenAI, 로컬 EXAONE는 클라우드 벤더 아님 → 자기편향 대상 아님
-    answer_vendor = None if local else "OpenAI"
+    # 답변 모델 벤더: GPT=OpenAI, Gemini=Google, 로컬 EXAONE는 클라우드 벤더 아님(자기편향 대상 아님)
+    if local:
+        answer_vendor = None
+    elif llm_vendor == "google":
+        answer_vendor = "Google"
+    else:
+        answer_vendor = "OpenAI"
     if eval_on:
         from rag.eval.judge import VENDORS
-        vendor = st.sidebar.selectbox("판사 벤더", list(VENDORS),
-                                      help="답변 모델과 다른 벤더를 권장합니다 (자기편향 방지)")
-        jkey = st.sidebar.text_input(f"{vendor} API 키", type="password",
-                                     value=st.session_state.get("judge_key_" + vendor, ""))
+        judge_vendor = st.sidebar.selectbox("판사 벤더", list(VENDORS),
+                                            help="답변 모델과 다른 벤더를 권장합니다 (자기편향 방지)")
+        jkey = st.sidebar.text_input(f"{judge_vendor} API 키", type="password",
+                                     value=st.session_state.get("judge_key_" + judge_vendor, ""))
         if jkey:
-            st.session_state["judge_key_" + vendor] = jkey   # session_state만
+            st.session_state["judge_key_" + judge_vendor] = jkey   # session_state만
         st.sidebar.caption("답변 모델과 다른 벤더 권장 (자기편향 방지)")
-        if vendor == answer_vendor:
+        if judge_vendor == answer_vendor:
             st.sidebar.warning("⚠ 판사와 답변 모델이 같은 벤더 — 자기편향 가능")
-        eval_cfg.update({"vendor": vendor, "key": jkey or None,
+        eval_cfg.update({"vendor": judge_vendor, "key": jkey or None,
                          "answer_vendor": answer_vendor})
 
     if st.sidebar.button("🔄 대화 초기화 (새 thread)"):
@@ -301,7 +322,7 @@ def sidebar():
     st.sidebar.caption(f"thread: {st.session_state.get('thread','')}")
     st.sidebar.divider()
     st.sidebar.caption("made by gyuyeong")
-    return eff_key, local, eval_cfg
+    return eff_key, local, llm_vendor, eval_cfg, local_model
 
 
 # ---------------------------------------------------------------- 메인
@@ -311,7 +332,7 @@ def main():
         st.session_state.thread = "ui-" + str(int(time.time()))
         st.session_state.messages = []
 
-    api_key, local, eval_cfg = sidebar()
+    api_key, local, llm_vendor, eval_cfg, local_model = sidebar()
 
     q = st.chat_input("질문을 입력하세요")
 
@@ -346,13 +367,14 @@ def main():
             st.error("로컬 모델이 준비되지 않았습니다. 사이드바 안내를 확인하세요.")
         return
     try:
-        L.get_llm("route", local=bool(local), api_key=api_key)
+        L.get_llm("route", local=bool(local), api_key=api_key, vendor=llm_vendor,
+                  local_model=local_model)
     except L.LLMError as e:
         with st.chat_message("assistant"):
             st.error(str(e))
         return
 
-    graph = make_graph(api_key, bool(local))
+    graph = make_graph(api_key, bool(local), llm_vendor, local_model)
     cfg = {"configurable": {"thread_id": st.session_state.thread}}
 
     with st.chat_message("assistant"):

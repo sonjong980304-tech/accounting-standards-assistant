@@ -176,13 +176,19 @@ def rewrite_query(llm, q, history=None):
 class Pipeline:
     """Index(무거운 모델)와 LLM 게터를 보유하고 그래프를 구성."""
 
-    def __init__(self, index: Index, api_key=None, local=False):
+    def __init__(self, index: Index, api_key=None, local=False, vendor=None, local_model=None):
         self.index = index
         self.api_key = api_key   # 메모리에만 보관, State/체크포인터에 넣지 않음
         self.local = local
+        self.vendor = vendor     # "google"(Gemini) 등. local=True면 local이 우선.
+        self.local_model = local_model   # local=True일 때 쓸 Ollama 태그(None=L.LOCAL_MODEL 기본값)
 
     def _llm(self, node):
-        return L.get_llm(node, local=self.local, api_key=self.api_key)
+        # rewrite/route는 항상 기본 모델 사용(self.local_model 전달 안 함) — QLoRA 파인튜닝은
+        # answer 노드의 인용 형식만 학습했고, route의 JSON 분류 프롬프트처럼 학습분포 밖의
+        # 요청을 받으면 문단번호를 끝없이 나열하는 반복생성 루프에 빠지는 결함이 실측 확인됨
+        # (2026-07-16, exaone3.5-lora:v1). answer 노드만 self.local_model(로라 가능)을 씀.
+        return L.get_llm(node, local=self.local, api_key=self.api_key, vendor=self.vendor)
 
     # ---------------------------------------------------------- 노드
     def rewrite(self, state: State):
@@ -267,7 +273,7 @@ class Pipeline:
         colls = state["route"]["collections"]
         q = state.get("rewritten") or state["question"]
         hits = self.index.retrieve_routed(q, colls, k=8,
-                                          min_standards=1, per_coll=12)
+                                          min_standards=1, per_coll=12, use_bm25=True)
         # 답변 전에 근거 카드를 렌더할 수 있게 원문·링크 메타를 함께 실음 (LLM 재생성 아님)
         slim = [{"ref_key": h["ref_key"], "doc_no": h["doc_no"],
                  "collection": h["collection"], "score": h["score"],
@@ -331,8 +337,14 @@ class Pipeline:
         valid = {h["ref_key"] or h["doc_no"] for h in hits}
         sys = self._answer_system_prompt()
         usr = "질문: {}\n\n근거:\n{}".format(q, ctx)
-        model = L.answer_chat_model(local=self.local, api_key=self.api_key)
-        mname = L.LOCAL_MODEL if self.local else L.MODELS["answer"]
+        model = L.answer_chat_model(local=self.local, api_key=self.api_key, vendor=self.vendor,
+                                    local_model=self.local_model)
+        if self.local:
+            mname = self.local_model or L.LOCAL_MODEL
+        elif self.vendor == "google":
+            mname = L.GEMINI_MODELS["answer"]
+        else:
+            mname = L.MODELS["answer"]
 
         def _call(user_msg):
             resp = model.invoke(
@@ -465,29 +477,29 @@ def attach_eval(question, eval_obj):
         return
 
 
-def build_graph(index, checkpoint_path=None, api_key=None, local=False):
+def build_graph(index, checkpoint_path=None, api_key=None, local=False, vendor=None, local_model=None):
     L.configure_langsmith()   # 트레이싱 활성/조용히 비활성 결정 (키 없으면 off)
-    p = Pipeline(index, api_key=api_key, local=local)
+    p = Pipeline(index, api_key=api_key, local=local, vendor=vendor, local_model=local_model)
     g = StateGraph(State)
     g.add_node("rewrite", p.rewrite)
-    g.add_node("route", p.route)
+    g.add_node("do_route", p.route)
     g.add_node("retrieve", p.retrieve)
     g.add_node("audit_lookup", p.audit_lookup)   # 접근법 B: retrieve와 병렬 사이드카
-    g.add_node("answer", p.answer)
+    g.add_node("do_answer", p.answer)
     g.add_node("verify", p.verify)
     # 진입: 히스토리(후속질문 맥락 해소)가 있으면 rewrite 먼저, 없으면 route부터(비용 절감).
-    g.add_conditional_edges(START, _entry_edge, {"rewrite": "rewrite", "route": "route"})
+    g.add_conditional_edges(START, _entry_edge, {"rewrite": "rewrite", "route": "do_route"})
     # rewrite는 두 경로에서 온다: ①진입(맥락 해소, route 전) ②retrieve 재시도(route 후).
     # route가 이미 끝났으면 재시도이므로 route를 다시 안 돌리고 retrieve로 바로 간다.
-    g.add_conditional_edges("rewrite", _after_rewrite_edge, {"route": "route", "retrieve": "retrieve"})
+    g.add_conditional_edges("rewrite", _after_rewrite_edge, {"route": "do_route", "retrieve": "retrieve"})
     # route 이후 retrieve(답변 근거)와 audit_lookup(참고용 사이드카)로 fan-out, 둘 다 answer로 합류.
-    g.add_edge("route", "retrieve")
-    g.add_edge("route", "audit_lookup")
+    g.add_edge("do_route", "retrieve")
+    g.add_edge("do_route", "audit_lookup")
     # retrieve 후 1차 검색 결과가 부실하면(top 리랭커 점수 <0.6) rewrite로 재시도(1회 한정),
     # 아니면 바로 answer로.
-    g.add_conditional_edges("retrieve", _after_retrieve_edge, {"rewrite": "rewrite", "answer": "answer"})
-    g.add_edge("audit_lookup", "answer")   # answer는 두 노드 완료 후 1회 실행(fan-in)
-    g.add_edge("answer", "verify")
+    g.add_conditional_edges("retrieve", _after_retrieve_edge, {"rewrite": "rewrite", "answer": "do_answer"})
+    g.add_edge("audit_lookup", "do_answer")   # answer는 두 노드 완료 후 1회 실행(fan-in)
+    g.add_edge("do_answer", "verify")
     g.add_edge("verify", END)
 
     saver = None

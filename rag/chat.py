@@ -5,8 +5,9 @@
     python3 -m rag.chat "1년 임차 후 1년 연장하면 단기리스 면제 되나?"
     python3 -m rag.chat --thread t1 --interactive           # 대화기억
     python3 -m rag.chat --local "..."                        # EXAONE(Ollama)
+    python3 -m rag.chat --vendor google "..."                # Gemini
 
-키: 환경변수 OPENAI_API_KEY 또는 .env. 없으면 안내(또는 --local).
+키: 환경변수 OPENAI_API_KEY/GOOGLE_API_KEY 또는 .env. 없으면 안내(또는 --local).
 """
 import argparse
 
@@ -47,21 +48,24 @@ def main():
     ap.add_argument("query", nargs="?")
     ap.add_argument("--thread", default="default", help="대화 thread_id (기억 단위)")
     ap.add_argument("--local", action="store_true", help="EXAONE 3.5 (Ollama)")
+    ap.add_argument("--vendor", choices=["openai", "google"], default="openai",
+                     help="google=Gemini (--local과 동시 지정 시 --local 우선)")
     ap.add_argument("--interactive", action="store_true")
     args = ap.parse_args()
+    vendor = None if args.vendor == "openai" else args.vendor
 
     # 키/모델 사전 점검 (무거운 Index 로드 전에 안내)
     try:
-        L.get_llm("route", local=args.local)
+        L.get_llm("route", local=args.local, vendor=vendor)
     except L.LLMError as e:
         print("[모델 준비 안됨]\n" + str(e))
         return
 
     print("인덱스 로드 중 (Chroma + BGE-M3 + 리랭커 + BM25)...", flush=True)
     index = Index()
-    graph = build_graph(index, checkpoint_path=CKPT, local=args.local)
+    graph = build_graph(index, checkpoint_path=CKPT, local=args.local, vendor=vendor)
     cfg = {"configurable": {"thread_id": args.thread}}
-    print(f"준비 완료 (thread={args.thread}, local={args.local})")
+    print(f"준비 완료 (thread={args.thread}, local={args.local}, vendor={args.vendor})")
 
     def run(q):
         state = graph.invoke({"question": q}, cfg)
