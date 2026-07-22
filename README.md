@@ -271,15 +271,13 @@ https://github.com/sonjong980304-tech/audit-sentinel
 | 틀린 전제 | F 0.8 / R 1.0 | refusal(채점 스킵) |
 | 근거 없음(미국세법) | refusal | refusal |
 
-> **판사를 OpenAI→Gemini로 교체한 이유:** 이전에는 GPT 답변을 OpenAI 판사가 채점해 **GPT 점수에 자기편향 여지**가 있었습니다(EXAONE만 독립 평가). Gemini로 바꾸면서 GPT·EXAONE 둘 다 판사와 다른 벤더가 되어 **양쪽 다 자기편향 없이 신뢰할 수 있는 점수**가 됐습니다.
 >
 > **관찰:** 파생상품 케이스는 EXAONE가 여전히 GPT보다 낮은 Faithfulness(0.8 vs 1.0)를 받아, 근거 이탈 경향이 판사를 바꿔도 재현됩니다. 다만 단기리스·틀린 전제 케이스에서는 EXAONE가 이번 실행에서 스스로 "근거를 찾지 못했습니다"로 refusal해 채점 자체가 스킵됐습니다 — 이전(2026-07-04, OpenAI 판사) 스냅샷에서는 같은 두 질문에 EXAONE가 정상 답변했었으므로, **LLM 특유의 비결정성**(같은 질문·같은 모델이라도 실행마다 refusal 여부가 달라짐)을 보여주는 사례입니다. 근거가 없는 질문(미국세법)은 두 모델 모두 매번 refusal해 환각 방지는 안정적으로 작동합니다.
 >
-> ※ 위 표는 2026-07-14 측정 스냅샷입니다(판사 Gemini 교체 후 재실행). 이전 OpenAI 판사 스냅샷(2026-07-04)과 마찬가지로, LLM 비결정성 때문에 재실행하면 점수·refusal 여부는 달라질 수 있습니다.
 
 #### 비용 — 질문·답변 한 쌍당 토큰 수·비용 (2026-07-20 별도 측정)
 
-위 4개 질문을 다시 실행하며 각 노드(검색범위 분류 `route`, 답변 생성 `answer`)가 실제로 소비한 토큰을 `usage_metadata`에서 직접 읽어 측정했습니다(추정치 아님, 원시 측정값은 [`eval/results/token_usage.jsonl`](eval/results/token_usage.jsonl)에 그대로 커밋되어 있습니다). GPT 비용은 이 토큰 수 × [OpenAI 공식 단가](https://developers.openai.com/api/docs/pricing)(gpt-4o-mini 입력 $0.15·출력 $0.60 / 1M, gpt-5.5 입력 $5.00·출력 $30.00 / 1M — 2026-07-20 확인, 근거: [references/llm_pricing.md](references/llm_pricing.md))로 계산했습니다. EXAONE은 로컬(Ollama) 구동이라 비용은 항상 $0입니다.
+위 4개 질문을 다시 실행하며 각 노드(검색범위 분류 `route`, 답변 생성 `answer`)가 실제로 소비한 토큰을 LangSmith를 통해 측정했습니다.추정치 아님, 원시 측정값은 [`eval/results/token_usage.jsonl`](eval/results/token_usage.jsonl)에 그대로 커밋되어 있습니다). EXAONE은 로컬(Ollama) 구동이라 비용은 항상 $0입니다.
 
 | 케이스 | GPT-5.5 (route+answer) | EXAONE (route+answer) |
 |---|---|---|
