@@ -389,12 +389,21 @@ EXAONE가 배포판에서 빠지는 이유는 구동 방식 때문입니다. EXA
 ```
 rag/            # RAG 파이프라인 (LangGraph)
   ├─ app.py        # Streamlit UI (3층 신뢰 구조 + 감리사례 사이드카)
+  ├─ chat.py       # RAG 챗 CLI (질문 한 줄로 파이프라인 실행, --interactive 대화모드)
   ├─ graph.py      # 파이프라인 (rewrite→route→{retrieve,audit_lookup}→answer→verify)
   ├─ search.py     # 하이브리드 검색 (BM25+dense→RRF→리랭킹)
+  ├─ embed.py      # 벡터DB 적재 (ChromaDB 4컬렉션)
+  ├─ reembed_terms.py # 용어 레코드만 재임베딩(임베딩 텍스트 수정 반영, upsert)
   ├─ llm.py        # 모델 추상화 (GPT / EXAONE)
   ├─ common.py     # 임베더·리랭커·컬렉션 정의
   ├─ sync_audit_cases.py       # 감리지적사례 동기화(audit-sentinel → audit_cases 컬렉션)
   ├─ install_audit_scheduler.sh # 감리사례 분기별 갱신 크론 등록(--print/--install)
+  ├─ diag.py       # 진단: 기준서 타깃의 검색 풀 랭크·컬렉션별 검색 확인
+  ├─ verify.py     # 검증 3케이스(정답을 아는 질의, 리랭커 전/후 순위 비교)
+  ├─ validate.py   # 3단계 검증(라우팅·환각방지·대화기억 5케이스 + JSON깨짐률·지연 측정)
+  ├─ local_validate.py # --local(EXAONE) 5케이스 검증(게이트 완화 후 refusal 확인)
+  ├─ ui_check.py   # UI 헤드리스 검증(스트리밍·근거데이터, 브라우저 없이)
+  ├─ token_check.py # 노드별 모델 토큰 usage 캡처 검증(LangSmith 연동 확인용)
   └─ eval/         # RAGAS 평가 (배치 + 실시간 판사) + 감리사례 검증(스모크테스트/표본검토)
 crawl/                 # 크롤러
   ├─ crawler.py           # 질의회신 크롤러
