@@ -264,6 +264,12 @@ https://github.com/sonjong980304-tech/audit-sentinel
 
 같은 질문을 답변 모델만 바꿔 생성하고 동일 판사(Google Gemini, `gemini-2.5-flash-lite`)로 채점했습니다. GPT=OpenAI, EXAONE=로컬(비클라우드) 답변 모델이라 **둘 다 판사와 다른 벤더** — 자기편향 없이 양쪽 다 독립 평가입니다. **F=Faithfulness(근거 충실도), R=Answer Relevancy(질문 관련성).**
 
+각 케이스의 실제 질문 원문([`rag/eval/compare_models.py`](rag/eval/compare_models.py)):
+- **단기리스**: "1년 임차 후 1년 연장하면 단기리스 면제 되나?"
+- **파생상품**: "전환사채 풋옵션이 파생상품 정의를 충족하는지"
+- **틀린 전제**: "모든 리스는 리스기간이 12개월을 초과하면 반드시 금융리스로 분류되나?"
+- **근거 없음(미국세법)**: "미국 세법상 감가상각 내용연수는 몇 년인가?"
+
 | 케이스 | GPT-5.5 *(독립 평가)* | EXAONE *(독립 평가)* |
 |---|---|---|
 | 단기리스 | F 1.0 / R 1.0 | refusal(채점 스킵) |
