@@ -283,7 +283,7 @@ https://github.com/sonjong980304-tech/audit-sentinel
 
 #### 비용 — 질문·답변 한 쌍당 토큰 수·비용 (2026-07-20 별도 측정)
 
-위 4개 질문을 다시 실행하며 각 노드(검색범위 분류 `route`, 답변 생성 `answer`)가 실제로 소비한 토큰을 LangSmith를 통해 측정했습니다.추정치 아님, 원시 측정값은 [`eval/results/token_usage.jsonl`](eval/results/token_usage.jsonl)에 그대로 커밋되어 있습니다). EXAONE은 로컬(Ollama) 구동이라 비용은 항상 $0입니다.
+위 4개 질문을 다시 실행하며 각 노드(검색범위 분류 `route`, 답변 생성 `answer`)가 실제로 소비한 토큰을 LangSmith를 통해 측정했습니다. (추정치 아님, 원시 측정값은 [`eval/results/token_usage.jsonl`](eval/results/token_usage.jsonl)에 그대로 커밋되어 있습니다). EXAONE은 로컬(Ollama) 구동이라 비용은 항상 $0입니다.
 
 | 케이스 | GPT-5.5 (route+answer) | EXAONE (route+answer) |
 |---|---|---|
